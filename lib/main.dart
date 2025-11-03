@@ -5,8 +5,9 @@ import 'package:provider/provider.dart';
 // Controllers (Lógica) - Adaptado aos seus nomes de arquivo
 import 'package:appetite/controllers/themecontroller.dart';
 import 'package:appetite/controllers/alarmcontroller.dart';
-import 'package:appetite/controllers/homecontroller.dart'; 
-import 'package:appetite/controllers/historycontroller.dart'; 
+import 'package:appetite/controllers/homecontroller.dart';
+import 'package:appetite/controllers/historycontroller.dart';
+import 'package:appetite/controllers/provisioningcontroller.dart';
 
 // Core (Tema)
 import 'package:appetite/core/theme/apptheme.dart'; // Adaptado
@@ -23,6 +24,7 @@ void main() {
         ChangeNotifierProvider(create: (_) => AlarmController()),
         ChangeNotifierProvider(create: (_) => HomeController()),
         ChangeNotifierProvider(create: (_) => HistoryController()),
+        ChangeNotifierProvider(create: (_) => ProvisioningController()),
       ],
       child: const MyApp(),
     ),
@@ -40,16 +42,16 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Appetite',
       debugShowCheckedModeBanner: false,
-      
+
       // 3. Aplica o tema dinâmico (cor e tamanho)
       theme: buildAppTheme(
         themeController.primaryColor,
-        themeController.fontSizeFactor, 
+        themeController.fontSizeFactor,
       ),
-      
+
       // 4. Chama a tela principal
       // REMOVEMOS O 'const' AQUI, pois o ThemeData é dinâmico, o que quebra o const
-      home: MainScreen(), 
+      home: MainScreen(),
     );
   }
 }
