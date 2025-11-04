@@ -1,11 +1,9 @@
-// lib/views/hometab.dart (CÓDIGO FINAL COM LÓGICA DE PROVISIONAMENTO)
+// lib/views/hometab.dart (CÓDIGO FINAL E CORRIGIDO)
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:appetite/controllers/homecontroller.dart';
-import 'package:appetite/views/widgets/provisioningscreen.dart'; // NOVO: Tela de Configuração Wi-Fi
-
-// Importe AppColors e ThemeController para acessar a cor primária global
+import 'package:appetite/views/widgets/provisioningscreen.dart'; // Import corrigido
 import 'package:appetite/core/constants/appcolors.dart';
 import 'package:appetite/controllers/themecontroller.dart';
 
@@ -22,7 +20,6 @@ class _HomeTabState extends State<HomeTab> {
   @override
   void initState() {
     super.initState();
-    // Tenta conectar logo que a tela é carregada
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Provider.of<HomeController>(context, listen: false).attemptConnection();
     });
@@ -34,11 +31,14 @@ class _HomeTabState extends State<HomeTab> {
     super.dispose();
   }
 
-  // Função utilitária para obter a cor do status (baseada na STRING de status)
   Color _getStatusColor(String statusMessage) {
-    if (statusMessage.contains("Conectado")) return Colors.green;
+    if (statusMessage.contains("Dispositivo ONLINE") ||
+        statusMessage.contains("Conexão bem-sucedida"))
+      return Colors.green;
     if (statusMessage.contains("Conectando")) return Colors.orange;
-    if (statusMessage.contains("Falha") || statusMessage.contains("Timeout"))
+    if (statusMessage.contains("Falha") ||
+        statusMessage.contains("Timeout") ||
+        statusMessage.contains("offline"))
       return Colors.red;
     return Colors.grey;
   }
@@ -57,8 +57,10 @@ class _HomeTabState extends State<HomeTab> {
       return;
     }
 
-    // Ação: Se a conexão estiver OK, envie o comando.
-    if (controller.message.contains("Conectado")) {
+    // CORREÇÃO: Checamos agora se a mensagem contém a chave de sucesso.
+    final bool canFeed = controller.message.contains("Dispositivo ONLINE");
+
+    if (canFeed) {
       controller.manualFeed(grams);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -72,7 +74,7 @@ class _HomeTabState extends State<HomeTab> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Erro: Dispositivo offline. Tente configurar ou reconectar.',
+            'Erro: Dispositivo offline. Status atual: ${controller.message}.',
           ),
         ),
       );
@@ -81,13 +83,11 @@ class _HomeTabState extends State<HomeTab> {
 
   @override
   Widget build(BuildContext context) {
-    // Acessamos o tema dinâmico para estilização
     final themeController = Provider.of<ThemeController>(context);
 
     return Consumer<HomeController>(
       builder: (context, controller, child) {
-        final statusMessage =
-            controller.message; // Usamos a mensagem completa do Controller
+        final statusMessage = controller.message;
         final statusColor = _getStatusColor(statusMessage);
 
         // Determina se a UI de alimentação deve estar ativa
@@ -111,7 +111,6 @@ class _HomeTabState extends State<HomeTab> {
                     CircleAvatar(radius: 5, backgroundColor: statusColor),
                     const SizedBox(width: 8),
                     Expanded(
-                      // Adiciona Expanded para evitar overflow de texto
                       child: Text(
                         statusMessage,
                         style: TextStyle(
@@ -128,7 +127,6 @@ class _HomeTabState extends State<HomeTab> {
                 if (!isConnected) // Se não estiver conectado, mostra o botão de ajuda
                   ElevatedButton.icon(
                     onPressed: () {
-                      // Se a conexão MQTT falhar ou estiver desconectada, inicie o Provisionamento
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (context) => const ProvisioningScreen(),
@@ -138,7 +136,6 @@ class _HomeTabState extends State<HomeTab> {
                     icon: const Icon(Icons.settings),
                     label: const Text('Configurar/Reconfigurar Wi-Fi'),
                     style: ElevatedButton.styleFrom(
-                      // Usa a cor primária do tema para o botão de setup
                       backgroundColor: themeController.primaryColor,
                       foregroundColor: Colors.black,
                     ),
