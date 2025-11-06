@@ -1,10 +1,9 @@
-// lib/views/hometab.dart (CÓDIGO FINAL E CORRIGIDO)
+// lib/views/hometab.dart (IU AMIGÁVEL E CORRIGIDA)
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:appetite/controllers/homecontroller.dart';
-import 'package:appetite/views/widgets/provisioningscreen.dart'; // Import corrigido
-import 'package:appetite/core/constants/appcolors.dart';
+import 'package:appetite/views/widgets/provisioningscreen.dart'; 
 import 'package:appetite/controllers/themecontroller.dart';
 
 class HomeTab extends StatefulWidget {
@@ -20,6 +19,7 @@ class _HomeTabState extends State<HomeTab> {
   @override
   void initState() {
     super.initState();
+    // Tenta conectar assim que a tela é carregada
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Provider.of<HomeController>(context, listen: false).attemptConnection();
     });
@@ -29,18 +29,6 @@ class _HomeTabState extends State<HomeTab> {
   void dispose() {
     _gramsController.dispose();
     super.dispose();
-  }
-
-  Color _getStatusColor(String statusMessage) {
-    if (statusMessage.contains("Dispositivo ONLINE") ||
-        statusMessage.contains("Conexão bem-sucedida"))
-      return Colors.green;
-    if (statusMessage.contains("Conectando")) return Colors.orange;
-    if (statusMessage.contains("Falha") ||
-        statusMessage.contains("Timeout") ||
-        statusMessage.contains("offline"))
-      return Colors.red;
-    return Colors.grey;
   }
 
   // Lógica para alimentar e mostrar feedback
@@ -57,10 +45,11 @@ class _HomeTabState extends State<HomeTab> {
       return;
     }
 
-    // CORREÇÃO: Checamos agora se a mensagem contém a chave de sucesso.
-    final bool canFeed = controller.message.contains("Dispositivo ONLINE");
-
-    if (canFeed) {
+    // CORREÇÃO CRÍTICA: 
+    // A verificação de "pode alimentar" agora usa o Enum 'status' (o estado real),
+    // e não a String 'message' (que muda para "Comando enviado...").
+    // Isso corrige o bug de "travamento" do botão.
+    if (controller.status == ConnectionStatus.connected) {
       controller.manualFeed(grams);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -71,10 +60,11 @@ class _HomeTabState extends State<HomeTab> {
       );
       _gramsController.clear();
     } else {
+      // Esta mensagem agora só aparece se o MQTT realmente cair
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+        const SnackBar(
           content: Text(
-            'Erro: Dispositivo offline. Status atual: ${controller.message}.',
+            'Erro: Dispositivo offline. Tente reconectar.',
           ),
         ),
       );
@@ -87,13 +77,13 @@ class _HomeTabState extends State<HomeTab> {
 
     return Consumer<HomeController>(
       builder: (context, controller, child) {
-        final statusMessage = controller.message;
-        final statusColor = _getStatusColor(statusMessage);
-
-        // Determina se a UI de alimentação deve estar ativa
-        final isConnected =
-            statusMessage.contains("Conexão bem-sucedida") ||
-            statusMessage.contains("Dispositivo ONLINE");
+        
+        // Usamos o Enum para lógica e a String 'message' para exibição
+        final statusEnum = controller.status;
+        final statusMessage = controller.message; 
+        
+        // A UI agora é habilitada pelo Enum 'status', não pela 'message'
+        final isConnected = (statusEnum == ConnectionStatus.connected);
 
         return Padding(
           padding: const EdgeInsets.all(16.0),
@@ -101,52 +91,15 @@ class _HomeTabState extends State<HomeTab> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // === ÁREA DE STATUS DA CONEXÃO ===
-                Row(
-                  children: [
-                    Text(
-                      'Status MQTT: ',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    CircleAvatar(radius: 5, backgroundColor: statusColor),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        statusMessage,
-                        style: TextStyle(
-                          color: statusColor,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                // Botão de Configuração/Reconexão
-                if (!isConnected) // Se não estiver conectado, mostra o botão de ajuda
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => const ProvisioningScreen(),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.settings),
-                    label: const Text('Configurar/Reconfigurar Wi-Fi'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: themeController.primaryColor,
-                      foregroundColor: Colors.black,
-                    ),
-                  ),
+                // === NOVA ÁREA DE STATUS DINÂMICA ===
+                _buildDynamicStatusUI(context, statusEnum, statusMessage, themeController.primaryColor),
 
                 const SizedBox(height: 32),
 
                 // === UI PARA ALIMENTAÇÃO MANUAL ===
                 Text(
                   'Alimentação Manual',
-                  style: Theme.of(context).textTheme.headlineSmall,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white),
                 ),
                 const SizedBox(height: 16),
 
@@ -159,8 +112,8 @@ class _HomeTabState extends State<HomeTab> {
                     hintText: 'Ex: 5.0',
                     border: OutlineInputBorder(),
                   ),
-                  // Desabilita se não estiver conectado
-                  enabled: isConnected,
+                  enabled: isConnected, // Habilitado pelo Enum
+                  style: const TextStyle(color: Colors.white),
                 ),
                 const SizedBox(height: 16),
 
@@ -168,16 +121,16 @@ class _HomeTabState extends State<HomeTab> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: isConnected
+                    onPressed: isConnected // Habilitado pelo Enum
                         ? () => _performManualFeed(controller)
-                        : null, // Desabilita o botão se não estiver conectado
+                        : null, 
                     icon: const Icon(Icons.send),
                     label: const Text('Alimentar Agora'),
                     style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      // Usa a cor primária do tema
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       backgroundColor: themeController.primaryColor,
                       foregroundColor: Colors.black,
+                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
                     ),
                   ),
                 ),
@@ -186,6 +139,88 @@ class _HomeTabState extends State<HomeTab> {
           ),
         );
       },
+    );
+  }
+
+  // NOVO WIDGET: Status de Conexão Amigável
+  Widget _buildDynamicStatusUI(BuildContext context, ConnectionStatus status, String message, Color themeColor) {
+    IconData icon;
+    Color color;
+    String friendlyMessage;
+    bool showConfigButton = false;
+
+    switch (status) {
+      case ConnectionStatus.connected:
+        icon = Icons.cloud_done_rounded;
+        color = Colors.green;
+        friendlyMessage = "Dispositivo Online";
+        break;
+      case ConnectionStatus.connecting:
+        icon = Icons.cloud_sync_rounded;
+        color = Colors.orange;
+        friendlyMessage = "Conectando...";
+        break;
+      case ConnectionStatus.error:
+        icon = Icons.cloud_off_rounded;
+        color = Colors.red;
+        friendlyMessage = "Dispositivo Offline";
+        showConfigButton = true;
+        break;
+      case ConnectionStatus.disconnected:
+      default:
+        icon = Icons.cloud_off_rounded;
+        color = Colors.grey;
+        friendlyMessage = "Dispositivo Desconectado";
+        showConfigButton = true;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24.0),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 60, color: color),
+          const SizedBox(height: 16),
+          Text(
+            friendlyMessage,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(color: color, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            message, // A mensagem técnica (ex: "Aguardando ESP32...")
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+            textAlign: TextAlign.center,
+          ),
+          
+          // Botão de Configuração/Reconexão
+          if (showConfigButton)
+            Padding(
+              padding: const EdgeInsets.only(top: 20.0),
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const ProvisioningScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.settings),
+                label: const Text('Configurar/Reconfigurar Wi-Fi'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: themeColor,
+                  foregroundColor: Colors.black,
+                  textStyle: const TextStyle(fontWeight: FontWeight.bold)
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

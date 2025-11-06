@@ -1,4 +1,3 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -22,9 +21,18 @@ void main() {
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeController()),
         ChangeNotifierProvider(create: (_) => AlarmController()),
+        
+        // O HomeController deve ser criado primeiro para que possamos referenciá-lo:
         ChangeNotifierProvider(create: (_) => HomeController()),
         ChangeNotifierProvider(create: (_) => HistoryController()),
-        ChangeNotifierProvider(create: (_) => ProvisioningController()),
+        
+        // CORREÇÃO: O ProvisioningController usa Provider.of para injetar o HomeController
+        ChangeNotifierProvider(
+          create: (context) => ProvisioningController(
+            // Pegamos o HomeController que já foi criado acima
+            homeController: Provider.of<HomeController>(context, listen: false), 
+          ),
+        ),
       ],
       child: const MyApp(),
     ),
@@ -50,7 +58,6 @@ class MyApp extends StatelessWidget {
       ),
 
       // 4. Chama a tela principal
-      // REMOVEMOS O 'const' AQUI, pois o ThemeData é dinâmico, o que quebra o const
       home: MainScreen(),
     );
   }

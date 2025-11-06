@@ -1,6 +1,5 @@
-// lib/services/provisioningservice.dart
 import 'package:http/http.dart' as http;
-import 'dart:convert';
+//import 'dart:convert';
 
 class ProvisioningService {
   // Endereço fixo do ESP32 quando está no modo Access Point (SoftAP)
@@ -11,8 +10,11 @@ class ProvisioningService {
     try {
       final response = await http.post(
         Uri.parse(AP_URL),
-        // O corpo da requisição deve corresponder ao que o ESP32 espera (handleConfig)
-        body: {'ssid': ssid, 'password': password},
+        // O corpo da requisição deve corresponder ao que o ESP32 espera (chave/valor)
+        body: {
+          'ssid': ssid,
+          'password': password,
+        },
       );
 
       // O ESP32 deve retornar um status 200 (OK) se receber as credenciais.
@@ -20,11 +22,13 @@ class ProvisioningService {
           response.body.contains("Credenciais recebidas")) {
         return true;
       } else {
+        // Log detalhado de falha de comunicação
+        print("Provisioning Failure: Status ${response.statusCode}, Body: ${response.body}");
         return false;
       }
     } catch (e) {
       // Falha de rede: geralmente significa que o celular não está conectado ao AP do ESP32
-      print("Provisioning Error: $e");
+      print("Provisioning Error: Celular não conectado ao AP do ESP32 (192.168.4.1 inacessível). Erro: $e");
       return false;
     }
   }
