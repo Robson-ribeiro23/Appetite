@@ -16,7 +16,6 @@ class SettingsTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16.0),
       children: [
-        // Título da Seção
         Text(
           'Personalização da Interface',
           style: theme.textTheme.titleLarge?.copyWith(
@@ -26,15 +25,19 @@ class SettingsTab extends StatelessWidget {
         ),
         const Divider(color: Colors.white12),
 
-        // --- 1. PAINEL DE CORES RGB (MUDANÇA DE TEMA) ---
+        // --- 1. PAINEL DE CORES RGB ---
         _buildColorThemeSection(context, themeController),
         const SizedBox(height: 30),
 
-        // --- 2. TAMANHO DOS COMPONENTES/TEXTO ---
+        // --- 2. BOTÃO DE TROCA DE TEMA (CLARO/ESCURO) ---
+        _buildThemeModeToggle(themeController, theme), // <--- NOVO AQUI
+        const SizedBox(height: 30),
+
+        // --- 3. TAMANHO DOS COMPONENTES/TEXTO ---
         _buildFontSizeSection(themeController, theme),
         const SizedBox(height: 30),
 
-        // --- 3. OUTRAS CONFIGURAÇÕES (Linguagem) ---
+        // --- 4. OUTRAS CONFIGURAÇÕES (Linguagem) ---
         Text(
           'Outras Configurações',
           style: theme.textTheme.titleLarge?.copyWith(
@@ -43,11 +46,37 @@ class SettingsTab extends StatelessWidget {
           ),
         ),
         const Divider(color: Colors.white12),
-        
         _buildLanguageSetting(theme),
       ],
     );
   }
+
+  // --- NOVO WIDGET PARA O BOTÃO DE TROCA DE TEMA ---
+  Widget _buildThemeModeToggle(ThemeController controller, ThemeData theme) {
+    final bool isDarkMode = controller.themeMode == ThemeMode.dark;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Modo do Tema:',
+          style: theme.textTheme.titleMedium,
+        ),
+        const SizedBox(height: 10),
+        ListTile(
+          title: const Text('Alternar Tema (Claro/Escuro)'),
+          leading: Icon(isDarkMode ? Icons.dark_mode : Icons.light_mode, color: theme.primaryColor),
+          trailing: Switch(
+            value: isDarkMode,
+            onChanged: (bool value) {
+              controller.toggleTheme();
+            },
+            activeColor: theme.primaryColor,
+          ),
+        ),
+      ],
+    );
+  }
+  // ----------------------------------------------------
 
   Widget _buildColorThemeSection(BuildContext context, ThemeController controller) {
     return Column(
@@ -58,7 +87,7 @@ class SettingsTab extends StatelessWidget {
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 10),
-        
+
         ListTile(
           title: const Text('Cor Atual'),
           trailing: Container(
@@ -77,15 +106,18 @@ class SettingsTab extends StatelessWidget {
       ],
     );
   }
-  
+
   void _showColorPickerDialog(BuildContext context, ThemeController controller) {
     Color pickerColor = controller.primaryColor;
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.darkBackground,
-        title: const Text('Selecione a Cor Principal'),
+        backgroundColor: AppColors.darkBackground, // Cor de fundo do picker pode precisar ser ajustada para tema claro
+        title: Text(
+          'Selecione a Cor Principal',
+          style: Theme.of(context).textTheme.titleMedium, // Ajusta o estilo do título
+        ),
         content: SingleChildScrollView(
           child: ColorPicker(
             pickerColor: pickerColor,
@@ -106,7 +138,7 @@ class SettingsTab extends StatelessWidget {
         ),
         actions: <Widget>[
           TextButton(
-            child: const Text('SALVAR', style: TextStyle(color: Colors.white)),
+            child: Text('SALVAR', style: TextStyle(color: Theme.of(context).primaryColor)), // Ajusta a cor do botão
             onPressed: () {
               controller.setPrimaryColor(pickerColor);
               Navigator.of(context).pop();
@@ -135,13 +167,13 @@ class SettingsTab extends StatelessWidget {
             controller.setFontSizeFactor(value);
           },
           activeColor: theme.primaryColor,
-          inactiveColor: Colors.white30,
+          inactiveColor: theme.disabledColor, // Usa disabledColor do tema para ser adaptativo
         ),
         Text(
           'Exemplo de texto.',
           style: theme.textTheme.bodyMedium?.copyWith(
             fontSize: (theme.textTheme.bodyMedium?.fontSize ?? 14) * controller.fontSizeFactor,
-            color: Colors.white,
+            // A cor já deve vir do TextTheme, evite sobrescrever aqui se possível
           ),
         ),
       ],
@@ -154,7 +186,7 @@ class SettingsTab extends StatelessWidget {
       title: const Text('Idioma'),
       trailing: DropdownButton<String>(
         value: 'Português',
-        dropdownColor: AppColors.darkBackground,
+        dropdownColor: theme.scaffoldBackgroundColor, // Usa o background do tema
         style: theme.textTheme.bodyLarge,
         items: <String>['Português', 'English']
             .map<DropdownMenuItem<String>>((String value) {

@@ -1,24 +1,24 @@
 // lib/controllers/homecontroller.dart
 
 import 'dart:async';
+import 'dart:convert'; // CORREÇÃO: ADICIONE NOVAMENTE para jsonDecode
 import 'package:flutter/material.dart';
-import 'package:appetite/services/esp32service.dart';
+import 'package:flutter/foundation.dart'; // CORREÇÃO: ADICIONE NOVAMENTE para kDebugMode
+import 'package:appetite/services/localesp32service.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected, error }
 
 class HomeController extends ChangeNotifier {
-  final ESP32Service _service = ESP32Service();
-  ConnectionStatus _status = ConnectionStatus.disconnected;
-  String _message = "Toque para conectar ao Broker MQTT";
+  final LocalESP32Service _service = LocalESP32Service();
 
-  // Completer usado para forçar a função de conexão a esperar a confirmação do ESP32
+  ConnectionStatus _status = ConnectionStatus.disconnected;
+  String _message = "Toque para conectar ao aplicativo";
+
   Completer<bool>? _connectionCompleter;
-  String _alarmPayload = '[]';
 
   ConnectionStatus get status => _status;
   String get message => _message;
 
-  // Getter de status para compatibilidade com a HomeTab (retorna a string correta)
   String get connectionStatus {
     switch (_status) {
       case ConnectionStatus.connected:
@@ -33,120 +33,160 @@ class HomeController extends ChangeNotifier {
   }
 
   HomeController() {
-    _listenToBrokerMessages();
+    _listenToESP32Status();
   }
 
-  // --- ESCUTA DE MENSAGENS DO BROKER ---
-  void _listenToBrokerMessages() {
-    _service.messageStream.listen((payload) {
-      // 1. A ESP32 envia a mensagem "online"
-      if (payload == 'online') {
-        // Se a mensagem 'online' chegar e o status ainda não for conectado, atualiza
-        if (_status != ConnectionStatus.connected) {
-          _status = ConnectionStatus.connected;
-          _message = "Conexão bem-sucedida! Dispositivo ONLINE.";
-          notifyListeners();
-        }
+  void _listenToESP32Status() {
+    _service.statusStream.listen((data) {
+      final String statusFromEsp = data['status'] ?? 'offline';
+      final bool motorIsRunning = data['motorIsRunning'] ?? false;
+      final String esp32Ip = data['localIP'] ?? 'N/A';
 
-        // 2. Resolve o Completer que estava esperando
+      if (kDebugMode) { // kDebugMode agora definido
+        print('HomeController: Status do ESP32 recebido: $statusFromEsp, Motor: $motorIsRunning, IP: $esp32Ip');
+      }
+
+      if (statusFromEsp == 'online' && (_status != ConnectionStatus.connected)) {
+        _status = ConnectionStatus.connected;
+        _message = "Conexão bem-sucedida! Dispositivo ONLINE (IP: $esp32Ip).";
+        notifyListeners();
         if (_connectionCompleter?.isCompleted == false) {
           _connectionCompleter!.complete(true);
         }
-        return;
-      }
-
-      // ... (Lógica de tratamento para outras mensagens: confirmação de dispensa, etc.)
-      if (payload.contains('success')) {
-        _message = "Dispensa concluída com sucesso!";
+      } else if (statusFromEsp == 'offline' && _status == ConnectionStatus.connected) {
+        _status = ConnectionStatus.disconnected;
+        _message = "Dispositivo offline. Tente reconectar.";
         notifyListeners();
+      } else if (statusFromEsp == 'offline' && _status == ConnectionStatus.connecting) {
+        _status = ConnectionStatus.error;
+        _message = "Falha na conexão inicial (dispositivo offline).";
+        notifyListeners();
+        if (_connectionCompleter?.isCompleted == false) {
+          _connectionCompleter!.complete(false);
+        }
       }
     });
   }
 
-  // --- LÓGICA DE CONEXÃO COM ESPERA E TIMEOUT ---
   Future<void> attemptConnection() async {
-    if (_status == ConnectionStatus.connecting ||
-        _status == ConnectionStatus.connected) {
+    if (_status == ConnectionStatus.connecting || _status == ConnectionStatus.connected) {
       return;
     }
 
     _status = ConnectionStatus.connecting;
-    _message = "Conectando ao Broker MQTT...";
-    notifyListeners();
-
-    // 1. Conecta ao Broker
-    bool brokerSuccess = await _service.connectToBroker();
-
-    if (!brokerSuccess) {
-      _status = ConnectionStatus.error;
-      _message = "Falha ao conectar ao Broker MQTT. Verifique sua rede.";
-      notifyListeners();
-      return;
-    }
-
-    // 2. Conexão com Broker OK. Agora, espera pela mensagem 'online' do ESP32
-    _message = "Conexão com Broker OK. Aguardando ESP32 (10s)...";
+    _message = "Tentando descobrir e conectar ao alimentador...";
     notifyListeners();
 
     _connectionCompleter = Completer<bool>();
 
+    bool discoverySuccess = await _service.discoverEsp32();
+
+    if (!discoverySuccess) {
+      _status = ConnectionStatus.error;
+      _message = "Não foi possível encontrar o alimentador na rede. Verifique o Wi-Fi e se o ESP32 está conectado.";
+      notifyListeners();
+      if (_connectionCompleter?.isCompleted == false) {
+        _connectionCompleter!.complete(false);
+      }
+      return;
+    }
+
+    _message = "Alimentador encontrado! Aguardando confirmação de status online...";
+    notifyListeners();
+    _service.startPollingStatus();
+
     try {
-      // 3. Espera pela confirmação do ESP32, com limite de 10 segundos
       bool esp32Confirmed = await _connectionCompleter!.future.timeout(
-        const Duration(seconds: 10),
+        const Duration(seconds: 15),
         onTimeout: () => false,
       );
 
       if (!esp32Confirmed) {
         _status = ConnectionStatus.error;
-        _message = "Conexão com ESP32 falhou (Timeout). Dispositivo offline.";
+        _message = "Conexão com o alimentador falhou (Timeout). Dispositivo offline ou não respondeu 'online'.";
         notifyListeners();
       }
     } on TimeoutException {
       _status = ConnectionStatus.error;
-      _message = "Conexão com ESP32 falhou (Timeout). Dispositivo offline.";
+      _message = "Conexão com o alimentador falhou (Timeout). Dispositivo offline ou não respondeu 'online'.";
       notifyListeners();
     } finally {
-      // Limpa o Completer para a próxima tentativa
       _connectionCompleter = null;
     }
   }
 
-  void manualFeed(double grams) {
+  Future<void> manualFeed(double grams) async {
     if (_status != ConnectionStatus.connected) {
       _message = "Erro: Dispositivo não conectado ou offline.";
       notifyListeners();
       return;
     }
 
-    final payload =
-        '{"command": "feed_manual", "grams": ${grams.toStringAsFixed(1)}}';
-    _service.publishCommand('appetite/comando/manual', payload);
+    _message = "Enviando comando de ${grams.toStringAsFixed(1)}g. Aguardando confirmação...";
+    notifyListeners();
 
-    _message =
-        "Comando de ${grams.toStringAsFixed(1)}g enviado. Aguardando confirmação...";
+    final payload = {"grams": grams};
+    bool success = await _service.publishCommand('/feed/manual', payload);
+
+    if (success) {
+      _message = "Comando de ${grams.toStringAsFixed(1)}g enviado e confirmado!";
+    } else {
+      _message = "Falha ao enviar comando de alimentação. Dispositivo offline ou erro.";
+    }
     notifyListeners();
   }
 
-  void sendAlarmConfiguration(String alarmsJson) {
+  Future<void> sendAlarmConfiguration(String alarmsJson) async {
     if (_status != ConnectionStatus.connected) {
-      _message =
-          "Erro: Aplicativo não conectado ao Broker. Configuração salva localmente.";
-      notifyListeners();
+      // Se não conectado, a mensagem de erro é mais relevante do que uma notificação de sucesso aqui.
+      // O notifyListeners() já deve ter sido chamado para o status de desconexão.
+      _message = "Erro: Dispositivo não conectado. Configuração salva localmente (não enviada ao ESP32).";
+      if (kDebugMode) print('HomeController: Alarme não enviado, dispositivo desconectado.');
+      notifyListeners(); // Mantém esta notificação para informar o erro.
       return;
     }
 
-    _alarmPayload = alarmsJson;
-    _service.publishCommand('appetite/comando/alarme', _alarmPayload);
+    // Evita loop, verifica se a mensagem já é a de envio e não mudou nada
+    String prevMessage = _message;
+    _message = "Enviando configuração de alarmes para o alimentador...";
+    if (prevMessage != _message) { // Notifica apenas se a mensagem realmente mudou
+      notifyListeners();
+    }
+    if (kDebugMode) print('HomeController: Tentando enviar alarmes...');
 
-    _message = "Configuração de alarmes enviada com sucesso.";
-    notifyListeners();
+
+    final payload = jsonDecode(alarmsJson) as Map<String, dynamic>; 
+    bool success = await _service.publishCommand('/alarms', payload);
+
+    if (success) {
+      // Notifica APENAS se a mensagem de sucesso for diferente da anterior
+      if (_message != "Configuração de alarmes enviada com sucesso.") {
+        _message = "Configuração de alarmes enviada com sucesso.";
+        notifyListeners();
+      }
+      if (kDebugMode) print('HomeController: Alarmes enviados com sucesso.');
+    } else {
+      // Notifica APENAS se a mensagem de falha for diferente da anterior
+      if (_message != "Falha ao enviar configuração de alarmes. Dispositivo offline ou erro.") {
+        _message = "Falha ao enviar configuração de alarmes. Dispositivo offline ou erro.";
+        notifyListeners();
+      }
+      if (kDebugMode) print('HomeController: Falha ao enviar alarmes.');
+    }
+    // Removi o notifyListeners() incondicional aqui para evitar loops
+    // Ele será chamado condicionalmente acima.
   }
-
+  
   void disconnect() {
     _service.disconnect();
     _status = ConnectionStatus.disconnected;
-    _message = "Desconectado do Broker.";
+    _message = "Desconectado do aplicativo.";
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _service.dispose();
+    super.dispose();
   }
 }

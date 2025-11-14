@@ -11,13 +11,16 @@ class AlarmListView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context); // Obtém o tema aqui
+
     return Consumer<AlarmController>(
       builder: (context, controller, child) {
         if (controller.alarms.isEmpty) {
-          return const Center(
+          return Center(
             child: Text(
               'Nenhum alarme configurado. Toque no "+" para adicionar.',
-              style: TextStyle(color: Colors.white70, fontSize: 16),
+              // CORREÇÃO: Usar cor de texto secundária do tema
+              style: theme.textTheme.bodyMedium, 
               textAlign: TextAlign.center,
             ),
           );
@@ -25,7 +28,6 @@ class AlarmListView extends StatelessWidget {
 
         return Stack(
           children: [
-            // A Lista Scrollável de Alarmes
             ListView.builder(
               itemCount: controller.alarms.length,
               itemBuilder: (context, index) {
@@ -39,16 +41,16 @@ class AlarmListView extends StatelessWidget {
               },
             ),
 
-            // O Botão Flutuante Centralizado na parte Inferior
             Align(
               alignment: Alignment.bottomCenter,
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 24.0), 
                 child: FloatingActionButton(
                   onPressed: () => _showAddEditAlarm(context, controller), 
-                  backgroundColor: Theme.of(context).primaryColor,
+                  backgroundColor: theme.primaryColor,
                   shape: const CircleBorder(),
-                  child: const Icon(Icons.add, size: 30.0, color: Colors.black),
+                  foregroundColor: theme.colorScheme.onPrimary, // CORREÇÃO: Cor do ícone no FAB
+                  child: const Icon(Icons.add, size: 30.0), // Removido 'color: Colors.black'
                 ),
               ),
             ),

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:appetite/controllers/alarmcontroller.dart';
 import 'package:appetite/models/alarmmodel.dart';
-import 'package:appetite/core/constants/appcolors.dart';
+// import 'package:appetite/core/constants/app_colors.dart'; // Não é mais necessário para cores de fundo hardcoded
 
 class AddAlarmDialog extends StatefulWidget {
   final Alarm? alarmToEdit; 
@@ -40,14 +40,21 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
       context: context,
       initialTime: _selectedTime,
       builder: (context, child) {
+        // CORREÇÃO: Usar o tema atual, não ThemeData.dark() hardcoded
+        // E ajustar o ColorScheme para respeitar o tema primário e secundário
+        final theme = Theme.of(context);
         return Theme(
-          data: ThemeData.dark().copyWith(
-            colorScheme: ColorScheme.dark(
-              primary: Theme.of(context).primaryColor,
-              onPrimary: Colors.black,
-              surface: AppColors.darkBackground,
-              onSurface: Colors.white,
+          data: theme.copyWith( // Copia o tema atual e sobrescreve
+            colorScheme: theme.colorScheme.copyWith(
+              primary: theme.primaryColor,
+              onPrimary: theme.colorScheme.onPrimary, // Cor do texto/ícones no primário
+              surface: theme.cardColor, // Fundo do seletor
+              onSurface: theme.textTheme.bodyLarge?.color, // Cor do texto no seletor
             ),
+            textButtonTheme: TextButtonThemeData( // Para botões de OK/CANCELAR
+              style: TextButton.styleFrom(foregroundColor: theme.primaryColor),
+            ),
+            // Adicione outras customizações para TimePicker se precisar
           ),
           child: child!,
         );
@@ -81,14 +88,12 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
     final double grams = double.parse(_gramsController.text);
     
     if (widget.alarmToEdit == null) {
-      // ADICIONAR NOVO ALARME
       controller.addAlarm(
         time: _selectedTime,
         grams: grams,
         days: _selectedDays,
       );
     } else {
-      // EDITAR ALARME EXISTENTE
       final updatedAlarm = widget.alarmToEdit!.copyWith(
         time: _selectedTime,
         grams: grams,
@@ -110,9 +115,10 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
     return Container(
       height: MediaQuery.of(context).size.height * 0.9, 
       padding: const EdgeInsets.all(24.0),
-      decoration: const BoxDecoration(
-        color: AppColors.darkBackground,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      // CORREÇÃO: Usar a cor de fundo do tema para o Container
+      decoration: BoxDecoration(
+        color: theme.scaffoldBackgroundColor, // Ou theme.cardColor
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -122,25 +128,24 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
             style: theme.textTheme.headlineSmall?.copyWith(color: theme.primaryColor),
             textAlign: TextAlign.center,
           ),
-          const Divider(color: Colors.white10),
+          // CORREÇÃO: Cor da Divider baseada no tema
+          Divider(color: theme.dividerColor), 
           
-          // 1. SELEÇÃO DE HORA
           ListTile(
             leading: Icon(Icons.access_time, color: theme.primaryColor),
             title: Text(
               'Hora: ${_selectedTime.format(context)}',
               style: theme.textTheme.titleLarge,
             ),
-            trailing: const Icon(Icons.edit, color: Colors.white70),
+            trailing: Icon(Icons.edit, color: theme.iconTheme.color), // CORREÇÃO
             onTap: _selectTime,
           ),
           const SizedBox(height: 16),
           
-          // 2. SELEÇÃO DE GRAMAS
           TextField(
             controller: _gramsController,
             keyboardType: TextInputType.number,
-            style: theme.textTheme.titleLarge?.copyWith(color: Colors.white),
+            style: theme.textTheme.titleLarge, // CORREÇÃO
             decoration: InputDecoration(
               labelText: 'Quantidade em Gramas',
               labelStyle: TextStyle(color: theme.primaryColor),
@@ -150,14 +155,13 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
                 borderRadius: BorderRadius.circular(10.0),
               ),
               enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.white54),
+                borderSide: BorderSide(color: theme.dividerColor), // CORREÇÃO
                 borderRadius: BorderRadius.circular(10.0),
               ),
             ),
           ),
           const SizedBox(height: 24),
 
-          // 3. SELEÇÃO DE DIAS DA SEMANA
           Text('Dias da Semana:', style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
           Row(
@@ -174,13 +178,13 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
                   height: 36,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: isSelected ? theme.primaryColor : Colors.grey.shade700,
+                    color: isSelected ? theme.primaryColor : theme.disabledColor, // CORREÇÃO: Cor do botão de dia
                     shape: BoxShape.circle,
                   ),
                   child: Text(
                     dayName,
                     style: TextStyle(
-                      color: isSelected ? Colors.black : Colors.white,
+                      color: isSelected ? theme.colorScheme.onPrimary : theme.textTheme.bodyMedium?.color, // CORREÇÃO: Cor do texto do dia
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -190,7 +194,6 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
           ),
           const SizedBox(height: 24),
           
-          // 4. REPETIR SEMANALMENTE
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -209,7 +212,6 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
           
           const Spacer(),
           
-          // Botão de Salvar/Atualizar
           ElevatedButton(
             onPressed: _saveAlarm,
             style: ElevatedButton.styleFrom(
@@ -219,15 +221,14 @@ class _AddAlarmDialogState extends State<AddAlarmDialog> {
             ),
             child: Text(
               isEditing ? 'Atualizar Alarme' : 'Salvar Alarme',
-              style: theme.textTheme.labelLarge?.copyWith(fontSize: 18),
+              style: theme.textTheme.labelLarge?.copyWith(fontSize: 18, color: theme.colorScheme.onPrimary), // CORREÇÃO
             ),
           ),
           const SizedBox(height: 8),
           
-          // Botão de Cancelar
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            child: Text('Cancelar', style: TextStyle(color: theme.textTheme.bodyMedium?.color?.withOpacity(0.7))), // CORREÇÃO
           ),
         ],
       ),

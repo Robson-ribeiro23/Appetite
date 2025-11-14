@@ -1,7 +1,7 @@
 // lib/views/alarms_tab/alarm_item_card.dart
 import 'package:flutter/material.dart';
 import 'package:appetite/models/alarmmodel.dart';
-import 'package:appetite/core/constants/appcolors.dart';
+import 'package:appetite/core/constants/app_colors.dart'; // Corrigido para app_colors.dart
 
 class AlarmItemCard extends StatelessWidget {
   final Alarm alarm;
@@ -30,7 +30,10 @@ class AlarmItemCard extends StatelessWidget {
     final theme = Theme.of(context);
     
     return Card(
-      color: alarm.isActive ? AppColors.darkBackground : Colors.grey.shade800,
+      // CORREÇÃO: Usar background do tema para cards
+      color: alarm.isActive 
+        ? theme.cardColor // Pode ser um pouco mais escuro ou o fundo primário
+        : theme.hoverColor, // Ou outra cor que indique desativado, mas respeite o tema
       margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
       elevation: 4,
       child: Padding(
@@ -38,11 +41,10 @@ class AlarmItemCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Hora do Alarme
             Text(
               alarm.time.format(context),
               style: theme.textTheme.headlineLarge?.copyWith(
-                color: alarm.isActive ? theme.primaryColor : Colors.white54,
+                color: alarm.isActive ? theme.primaryColor : theme.textTheme.bodyMedium?.color?.withOpacity(0.5), // CORREÇÃO
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -53,19 +55,17 @@ class AlarmItemCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Quantidade em Gramas
                   Text(
                     '${alarm.grams.toStringAsFixed(1)} gramas',
                     style: theme.textTheme.bodyLarge?.copyWith(
-                      color: alarm.isActive ? Colors.white : Colors.white54,
+                      color: alarm.isActive ? theme.textTheme.bodyLarge?.color : theme.textTheme.bodyLarge?.color?.withOpacity(0.5), // CORREÇÃO
                     ),
                   ),
                   const SizedBox(height: 4),
-                  // Dias da Semana
                   Text(
                     _formatDays(alarm.repeatDays),
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: alarm.isActive ? Colors.white70 : Colors.white38,
+                      color: alarm.isActive ? theme.textTheme.bodyMedium?.color?.withOpacity(0.7) : theme.textTheme.bodySmall?.color, // CORREÇÃO
                       fontStyle: FontStyle.italic,
                     ),
                   ),
@@ -73,14 +73,12 @@ class AlarmItemCard extends StatelessWidget {
               ),
             ),
             
-            // Switch para Ativar/Desativar
             Switch(
               value: alarm.isActive,
               onChanged: (val) => onToggle(),
               activeTrackColor: theme.colorScheme.secondary,
             ),
             
-            // Botão de Opções (Editar e Excluir)
             PopupMenuButton<String>(
               onSelected: (value) {
                 if (value == 'edit') {
@@ -90,16 +88,17 @@ class AlarmItemCard extends StatelessWidget {
                 }
               },
               itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                const PopupMenuItem<String>(
+                // CORREÇÃO: Definir TextStyle para os itens do menu
+                PopupMenuItem<String>(
                   value: 'edit',
-                  child: Text('Editar'),
+                  child: Text('Editar', style: theme.textTheme.bodyMedium),
                 ),
-                const PopupMenuItem<String>(
+                PopupMenuItem<String>(
                   value: 'delete',
-                  child: Text('Excluir'),
+                  child: Text('Excluir', style: theme.textTheme.bodyMedium),
                 ),
               ],
-              icon: const Icon(Icons.more_vert, color: Colors.white70),
+              icon: Icon(Icons.more_vert, color: theme.iconTheme.color), // CORREÇÃO
             ),
           ],
         ),

@@ -1,36 +1,27 @@
-// lib/models/alarm_model.dart
+// lib/models/alarmmodel.dart
+
 import 'package:flutter/material.dart';
 
 class Alarm {
-  // Um ID único para facilitar a edição e exclusão (importante para listas)
   final String id;
-  
-  // O horário que o alarme irá tocar
   TimeOfDay time;
-  
-  // A quantidade em gramas a ser dispensada
   double grams;
-  
-  // Lista de dias da semana (1=Seg, 2=Ter, ..., 7=Dom)
-  List<int> repeatDays;
-  
-  // Indica se o alarme está ativo ou desativado
+  List<int> repeatDays; // 1 = Seg, 7 = Dom
   bool isActive;
-  
-  // Indica se o alarme deve se repetir semanalmente (além dos dias escolhidos)
-  bool isRepeatingWeekly;
+  bool isRepeatingWeekly; 
 
   Alarm({
     required this.id,
     required this.time,
     required this.grams,
-    required this.repeatDays,
-    this.isActive = true, // Por padrão, o alarme é criado ativo
-    this.isRepeatingWeekly = true,
+    this.repeatDays = const [],
+    this.isActive = true,
+    this.isRepeatingWeekly = true, 
   });
 
-  // Método para criar uma cópia do objeto (útil para edição)
+  // --- NOVO: Método copyWith para facilitar a atualização ---
   Alarm copyWith({
+    String? id,
     TimeOfDay? time,
     double? grams,
     List<int>? repeatDays,
@@ -38,7 +29,7 @@ class Alarm {
     bool? isRepeatingWeekly,
   }) {
     return Alarm(
-      id: id,
+      id: id ?? this.id,
       time: time ?? this.time,
       grams: grams ?? this.grams,
       repeatDays: repeatDays ?? this.repeatDays,
@@ -46,4 +37,25 @@ class Alarm {
       isRepeatingWeekly: isRepeatingWeekly ?? this.isRepeatingWeekly,
     );
   }
+
+  // Método para converter o objeto Alarm em um Map para JSON
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'hour': time.hour,
+        'minute': time.minute,
+        'grams': grams,
+        'repeatDays': repeatDays,
+        'isActive': isActive,
+        'isRepeatingWeekly': isRepeatingWeekly,
+      };
+
+  // Método de fábrica para criar um objeto Alarm a partir de um Map JSON
+  factory Alarm.fromJson(Map<String, dynamic> json) => Alarm(
+        id: json['id'] as String,
+        time: TimeOfDay(hour: json['hour'] as int, minute: json['minute'] as int),
+        grams: (json['grams'] as num).toDouble(),
+        repeatDays: (json['repeatDays'] as List<dynamic>).map((e) => e as int).toList(),
+        isActive: json['isActive'] as bool,
+        isRepeatingWeekly: json['isRepeatingWeekly'] as bool,
+      );
 }

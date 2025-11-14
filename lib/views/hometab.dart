@@ -19,7 +19,6 @@ class _HomeTabState extends State<HomeTab> {
   @override
   void initState() {
     super.initState();
-    // Tenta conectar assim que a tela é carregada
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Provider.of<HomeController>(context, listen: false).attemptConnection();
     });
@@ -31,7 +30,6 @@ class _HomeTabState extends State<HomeTab> {
     super.dispose();
   }
 
-  // Lógica para alimentar e mostrar feedback
   void _performManualFeed(HomeController controller) {
     final gramsText = _gramsController.text;
     final grams = double.tryParse(gramsText);
@@ -45,22 +43,17 @@ class _HomeTabState extends State<HomeTab> {
       return;
     }
 
-    // CORREÇÃO CRÍTICA: 
-    // A verificação de "pode alimentar" agora usa o Enum 'status' (o estado real),
-    // e não a String 'message' (que muda para "Comando enviado...").
-    // Isso corrige o bug de "travamento" do botão.
     if (controller.status == ConnectionStatus.connected) {
       controller.manualFeed(grams);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Comando de alimentação de $grams gramas enviado com sucesso!',
+            'Comando de alimentação de $grams gramas enviado!', // Mensagem atualizada
           ),
         ),
       );
       _gramsController.clear();
     } else {
-      // Esta mensagem agora só aparece se o MQTT realmente cair
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -73,16 +66,15 @@ class _HomeTabState extends State<HomeTab> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final themeController = Provider.of<ThemeController>(context);
 
     return Consumer<HomeController>(
       builder: (context, controller, child) {
         
-        // Usamos o Enum para lógica e a String 'message' para exibição
         final statusEnum = controller.status;
         final statusMessage = controller.message; 
         
-        // A UI agora é habilitada pelo Enum 'status', não pela 'message'
         final isConnected = (statusEnum == ConnectionStatus.connected);
 
         return Padding(
@@ -91,37 +83,35 @@ class _HomeTabState extends State<HomeTab> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // === NOVA ÁREA DE STATUS DINÂMICA ===
                 _buildDynamicStatusUI(context, statusEnum, statusMessage, themeController.primaryColor),
 
                 const SizedBox(height: 32),
 
-                // === UI PARA ALIMENTAÇÃO MANUAL ===
                 Text(
                   'Alimentação Manual',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white),
+                  style: theme.textTheme.headlineSmall, 
                 ),
                 const SizedBox(height: 16),
 
-                // Campo de entrada para gramas
                 TextField(
                   controller: _gramsController,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration( 
                     labelText: 'Quantidade de Ração (gramas)',
                     hintText: 'Ex: 5.0',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
+                    labelStyle: TextStyle(color: theme.textTheme.bodyMedium?.color), 
+                    hintStyle: TextStyle(color: theme.textTheme.bodyMedium?.color?.withOpacity(0.7)), 
                   ),
-                  enabled: isConnected, // Habilitado pelo Enum
-                  style: const TextStyle(color: Colors.white),
+                  enabled: isConnected,
+                  style: TextStyle(color: theme.textTheme.bodyLarge?.color), 
                 ),
                 const SizedBox(height: 16),
 
-                // Botão de Alimentar
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: isConnected // Habilitado pelo Enum
+                    onPressed: isConnected
                         ? () => _performManualFeed(controller)
                         : null, 
                     icon: const Icon(Icons.send),
@@ -129,7 +119,7 @@ class _HomeTabState extends State<HomeTab> {
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       backgroundColor: themeController.primaryColor,
-                      foregroundColor: Colors.black,
+                      foregroundColor: theme.colorScheme.onPrimary, 
                       textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
                     ),
                   ),
@@ -142,33 +132,33 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  // NOVO WIDGET: Status de Conexão Amigável
   Widget _buildDynamicStatusUI(BuildContext context, ConnectionStatus status, String message, Color themeColor) {
     IconData icon;
     Color color;
     String friendlyMessage;
     bool showConfigButton = false;
+    final theme = Theme.of(context);
 
     switch (status) {
       case ConnectionStatus.connected:
-        icon = Icons.cloud_done_rounded;
+        icon = Icons.wifi_rounded; // Ícone de Wi-Fi para conexão local
         color = Colors.green;
         friendlyMessage = "Dispositivo Online";
         break;
       case ConnectionStatus.connecting:
-        icon = Icons.cloud_sync_rounded;
+        icon = Icons.wifi_find_rounded;
         color = Colors.orange;
         friendlyMessage = "Conectando...";
         break;
       case ConnectionStatus.error:
-        icon = Icons.cloud_off_rounded;
+        icon = Icons.wifi_off_rounded;
         color = Colors.red;
         friendlyMessage = "Dispositivo Offline";
         showConfigButton = true;
         break;
       case ConnectionStatus.disconnected:
       default:
-        icon = Icons.cloud_off_rounded;
+        icon = Icons.wifi_off_rounded;
         color = Colors.grey;
         friendlyMessage = "Dispositivo Desconectado";
         showConfigButton = true;
@@ -188,17 +178,16 @@ class _HomeTabState extends State<HomeTab> {
           const SizedBox(height: 16),
           Text(
             friendlyMessage,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(color: color, fontWeight: FontWeight.bold),
+            style: theme.textTheme.titleLarge?.copyWith(color: color, fontWeight: FontWeight.bold),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
           Text(
             message, // A mensagem técnica (ex: "Aguardando ESP32...")
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+            style: theme.textTheme.bodyMedium?.copyWith(color: theme.textTheme.bodyMedium?.color?.withOpacity(0.7)), 
             textAlign: TextAlign.center,
           ),
           
-          // Botão de Configuração/Reconexão
           if (showConfigButton)
             Padding(
               padding: const EdgeInsets.only(top: 20.0),
@@ -214,7 +203,7 @@ class _HomeTabState extends State<HomeTab> {
                 label: const Text('Configurar/Reconfigurar Wi-Fi'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: themeColor,
-                  foregroundColor: Colors.black,
+                  foregroundColor: theme.colorScheme.onPrimary, 
                   textStyle: const TextStyle(fontWeight: FontWeight.bold)
                 ),
               ),

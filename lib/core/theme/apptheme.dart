@@ -1,57 +1,64 @@
-// lib/core/theme/app_theme.dart
-
-// lib/core/theme/apptheme.dart (CORREÇÃO)
-
+// lib/core/theme/apptheme.dart
 import 'package:flutter/material.dart';
-// Mude para o import via package:
-import 'package:appetite/core/constants/appcolors.dart'; 
+import 'package:appetite/core/constants/app_colors.dart'; // MANTEMOS ESTE IMPORT!
 
-// ... (Resto do código do buildAppTheme)
+// MODIFICAÇÃO: A função agora recebe um Brightness
+ThemeData buildAppTheme(Color primaryColor, double fontSizeFactor, Brightness brightness) {
+  // Define a cor de fundo e de texto baseadas no brilho
+  final bool isDark = brightness == Brightness.dark;
+  final Color backgroundColor = isDark ? AppColors.darkBackground : AppColors.lightBackground;
+  final Color textColor = isDark ? Colors.white : Colors.black;
+  final Color secondaryTextColor = isDark ? Colors.white70 : Colors.black54;
 
-// MODIFICAÇÃO: A função agora recebe o fator de escala de fonte
-ThemeData buildAppTheme(Color primaryColor, double fontSizeFactor) {
-  // Define o TextTheme padrão, escalando cada tamanho pelo fator
-  final baseTextTheme = const TextTheme(
-    displayLarge: TextStyle(color: Colors.white, fontSize: 57),
-    displayMedium: TextStyle(color: Colors.white, fontSize: 45),
-    displaySmall: TextStyle(color: Colors.white, fontSize: 36),
-    headlineLarge: TextStyle(color: Colors.white, fontSize: 32),
-    headlineMedium: TextStyle(color: Colors.white, fontSize: 28),
-    headlineSmall: TextStyle(color: Colors.white, fontSize: 24),
-    titleLarge: TextStyle(color: Colors.white, fontSize: 22),
-    titleMedium: TextStyle(color: Colors.white, fontSize: 16),
-    titleSmall: TextStyle(color: Colors.white, fontSize: 14),
-    bodyLarge: TextStyle(color: Colors.white, fontSize: 16),
-    bodyMedium: TextStyle(color: Colors.white70, fontSize: 14),
-    bodySmall: TextStyle(color: Colors.white60, fontSize: 12),
-    labelLarge: TextStyle(color: Colors.black, fontSize: 14),
-    labelMedium: TextStyle(color: Colors.white70, fontSize: 12),
-    labelSmall: TextStyle(color: Colors.white60, fontSize: 11),
+  final baseTextTheme = TextTheme(
+    displayLarge: TextStyle(color: textColor, fontSize: 57),
+    displayMedium: TextStyle(color: textColor, fontSize: 45),
+    displaySmall: TextStyle(color: textColor, fontSize: 36),
+    headlineLarge: TextStyle(color: textColor, fontSize: 32),
+    headlineMedium: TextStyle(color: textColor, fontSize: 28),
+    headlineSmall: TextStyle(color: textColor, fontSize: 24),
+    titleLarge: TextStyle(color: textColor, fontSize: 22),
+    titleMedium: TextStyle(color: secondaryTextColor, fontSize: 16),
+    titleSmall: TextStyle(color: secondaryTextColor, fontSize: 14),
+    bodyLarge: TextStyle(color: textColor, fontSize: 16),
+    bodyMedium: TextStyle(color: secondaryTextColor, fontSize: 14),
+    bodySmall: TextStyle(color: secondaryTextColor, fontSize: 12),
+    labelLarge: TextStyle(color: isDark ? Colors.black : Colors.white, fontSize: 14), // Botões
+    labelMedium: TextStyle(color: secondaryTextColor, fontSize: 12),
+    labelSmall: TextStyle(color: secondaryTextColor, fontSize: 11),
   );
 
   return ThemeData(
-    primaryColor: primaryColor, 
-    colorScheme: ColorScheme.fromSwatch().copyWith(
-      secondary: AppColors.accentColor,
+    primaryColor: primaryColor,
+    colorScheme: ColorScheme.fromSwatch(
+      primarySwatch: MaterialColor(primaryColor.value, AppColors.getMaterialColorMap(primaryColor)),
+      accentColor: AppColors.accentColor, // Use accentColor se necessário
+      brightness: brightness, // Usa o brilho passado
+      backgroundColor: backgroundColor,
+    ).copyWith(
       primary: primaryColor,
-      brightness: Brightness.dark,
+      secondary: AppColors.accentColor,
+      brightness: brightness,
     ),
-    scaffoldBackgroundColor: AppColors.darkBackground,
+    scaffoldBackgroundColor: backgroundColor, // Fundo principal da tela
     appBarTheme: AppBarTheme(
-      backgroundColor: AppColors.darkBackground,
-      // O título do App Bar também deve escalar
+      backgroundColor: backgroundColor,
       titleTextStyle: baseTextTheme.titleLarge?.copyWith(
         fontSize: (baseTextTheme.titleLarge?.fontSize ?? 22) * fontSizeFactor,
         fontWeight: FontWeight.bold,
+        color: textColor, // Cor do título do App Bar
       ),
+      iconTheme: IconThemeData(color: textColor), // Cor dos ícones no App Bar
       elevation: 0,
     ),
-    
-    // APLICAÇÃO GLOBAL: Usa o fator de escala no TextTheme.
     textTheme: baseTextTheme.apply(
         fontSizeFactor: fontSizeFactor,
+        bodyColor: textColor,
+        displayColor: textColor,
     ),
-
-    brightness: Brightness.dark,
+    brightness: brightness, // Define o brilho geral do tema
   );
 }
+
+// REMOVIDA DAQUI - ESTÁ NO SEU PRÓPRIO ARQUIVO: lib/core/constants/app_colors.dart
+// class AppColors { ... }

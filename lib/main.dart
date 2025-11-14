@@ -1,8 +1,12 @@
+// lib/main.dart
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 // Services
 import 'package:appetite/services/notification_service.dart';
+// import 'package:appetite/services/esp32service.dart'; // REMOVA (se ainda existir)
+import 'package:appetite/services/localesp32service.dart'; // ADICIONE
 
 // Controllers (Lógica)
 import 'package:appetite/controllers/themecontroller.dart';
@@ -18,40 +22,31 @@ import 'package:appetite/core/theme/apptheme.dart';
 import 'package:appetite/views/mainscreen.dart';
 
 void main() async {
-  // 1. Garante que o binding do Flutter esteja inicializado antes de serviços nativos
   WidgetsFlutterBinding.ensureInitialized();
-
-  // 2. Inicializa o serviço de notificações antes do app rodar
-  // Isso garante que os canais de notificação do Android estejam prontos
   await NotificationService().init();
 
   runApp(
     MultiProvider(
       providers: [
-        // --- CONTROLLERS INDEPENDENTES ---
         ChangeNotifierProvider(create: (_) => ThemeController()),
         ChangeNotifierProvider(create: (_) => HomeController()),
         ChangeNotifierProvider(create: (_) => HistoryController()),
 
-        // --- CONTROLLERS DEPENDENTES (Usam ProxyProvider) ---
-        
-        // AlarmController precisa de HomeController (para enviar comando) 
-        // e HistoryController (para registrar sucesso/falha)
+        // AlarmController agora depende apenas de HomeController e HistoryController
         ChangeNotifierProxyProvider2<HomeController, HistoryController, AlarmController>(
           create: (context) => AlarmController(
             homeController: Provider.of<HomeController>(context, listen: false),
             historyController: Provider.of<HistoryController>(context, listen: false),
           ),
           update: (context, homeCtrl, historyCtrl, previousAlarmCtrl) {
-            // Mantém a instância existente se possível, apenas atualizando as dependências
             return previousAlarmCtrl ?? AlarmController(
-              homeController: homeCtrl, 
-              historyController: historyCtrl
+              homeController: homeCtrl,
+              historyController: historyCtrl,
             );
           },
         ),
 
-        // ProvisioningController precisa de HomeController (para conectar após o setup)
+        // ProvisioningController depende de HomeController
         ChangeNotifierProxyProvider<HomeController, ProvisioningController>(
           create: (context) => ProvisioningController(
             homeController: Provider.of<HomeController>(context, listen: false),
@@ -71,20 +66,22 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 3. Escuta as mudanças de tema e tamanho para reconstruir o app todo se mudar
     final themeController = Provider.of<ThemeController>(context);
 
     return MaterialApp(
       title: 'Appetite',
       debugShowCheckedModeBanner: false,
-
-      // 4. Aplica o tema dinâmico (cor e fator de tamanho da fonte)
       theme: buildAppTheme(
         themeController.primaryColor,
         themeController.fontSizeFactor,
+        Brightness.light,
       ),
-
-      // 5. Define a tela inicial
+      darkTheme: buildAppTheme(
+        themeController.primaryColor,
+        themeController.fontSizeFactor,
+        Brightness.dark,
+      ),
+      themeMode: themeController.themeMode,
       home: const MainScreen(),
     );
   }

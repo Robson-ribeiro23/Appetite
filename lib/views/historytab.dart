@@ -10,13 +10,16 @@ class HistoryTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context); // Obtém o tema aqui
+
     return Consumer<HistoryController>(
       builder: (context, controller, child) {
         if (controller.history.isEmpty) {
-          return const Center(
+          return Center(
             child: Text(
               'Nenhum histórico de atividade registrado.',
-              style: TextStyle(color: Colors.white70, fontSize: 16),
+              // CORREÇÃO: Usar cor de texto secundária do tema
+              style: theme.textTheme.bodyMedium, 
               textAlign: TextAlign.center,
             ),
           );
@@ -35,7 +38,6 @@ class HistoryTab extends StatelessWidget {
   }
 }
 
-// Widget privado para exibir um item do histórico
 class _HistoryItemCard extends StatelessWidget {
   final HistoryEntry entry;
   
@@ -49,8 +51,6 @@ class _HistoryItemCard extends StatelessWidget {
         return {'icon': Icons.touch_app, 'color': theme.colorScheme.secondary};
       case HistoryType.error:
         return {'icon': Icons.warning_amber, 'color': Colors.red.shade400};
-      //default:
-        //return {'icon': Icons.info_outline, 'color': Colors.grey};
     }
   }
 
@@ -70,11 +70,13 @@ class _HistoryItemCard extends StatelessWidget {
       ),
       title: Text(
         entry.description,
-        style: theme.textTheme.titleMedium?.copyWith(color: Colors.white),
+        // CORREÇÃO: Usar cor de texto primária do tema
+        style: theme.textTheme.titleMedium,
       ),
       subtitle: Text(
         _formatDateTime(entry.timestamp),
-        style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
+        // CORREÇÃO: Usar cor de texto secundária do tema
+        style: theme.textTheme.bodySmall,
       ),
       trailing: entry.gramsDispensed != null
           ? Text(
