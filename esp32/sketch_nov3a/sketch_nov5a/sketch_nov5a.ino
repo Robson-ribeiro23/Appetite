@@ -3,46 +3,60 @@
 #include <WebServer.h>      
 #include <ArduinoJson.h>
 #include <time.h> 
-#include <Preferences.h>    
+#include <Preferences.h>
+#include <vector> // Necessário para lista dinâmica de alarmes
 
-//06_11_2025
-
+// --- CONFIGURAÇÕES MQTT ---
 const char* mqttServer = "test.mosquitto.org"; 
 const int mqttPort = 1883; 
 const char* mqttClientID = "ESP32_Appetite_Device";
-
-const int MOTOR_PIN = 23; /
-const int FACTORY_RESET_PIN = 0; 
-
 
 const char* COMMAND_MANUAL_TOPIC = "appetite/comando/manual";
 const char* COMMAND_ALARME_TOPIC = "appetite/comando/alarme";
 const char* STATUS_TOPIC = "appetite/status/conexao";
 const char* DISPENSE_STATUS_TOPIC = "appetite/status/dispensa";
 
+// --- HARDWARE ---
+const int MOTOR_PIN = 23; 
+const int FACTORY_RESET_PIN = 0; 
 
+// --- OBJETOS ---
 WiFiClient espClient;
 PubSubClient client(espClient);
 Preferences preferences; 
 WebServer server(80);
+
+// --- VARIÁVEIS DE REDE ---
 const char* AP_SSID = "Appetite_SETUP"; 
 const char* AP_PASSWORD = "";          
 String user_ssid = "";
 String user_password = ""; 
 bool provisioned = false; 
+
+// --- RELÓGIO NTP ---
 const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = -10800; 
+const long  gmtOffset_sec = -10800; // GMT-3 (Brasil)
 const int   daylightOffset_sec = 0;
 
-
+// --- ESTADO DO MOTOR ---
 bool motorIsRunning = false;
 unsigned long motorStopTime = 0;
 
+// --- ESTRUTURA DE ALARMES (NOVO) ---
+struct Alarm {
+    int hour;
+    int minute;
+    double grams;
+    bool active;
+    // Nota: Simplificamos para não checar dias da semana por enquanto no ESP
+    // para garantir que funcione a lógica básica primeiro.
+};
+std::vector<Alarm> scheduledAlarms; // Lista de alarmes na memória
+int lastCheckedMinute = -1; // Para evitar disparar várias vezes no mesmo minuto
 
-
+// --- FUNÇÕES ---
 
 void dispenseFood(double grams) {
-   
     if (motorIsRunning) {
         Serial.println("Motor já está em funcionamento, comando ignorado.");
         return;
@@ -50,128 +64,140 @@ void dispenseFood(double grams) {
   
     Serial.printf("Comando recebido: Dispensar %.1f gramas.\n", grams);
     
-    
-    long dispenseTimeMs = (long)(grams * 100); 
+    // Fator de calibração: 250ms por grama (Ajuste solicitado)
+    long dispenseTimeMs = (long)(grams * 250); 
 
     Serial.printf("Motor será ligado por %ld milissegundos.\n", dispenseTimeMs);
 
-  
     motorIsRunning = true;
     motorStopTime = millis() + dispenseTimeMs; 
     digitalWrite(MOTOR_PIN, HIGH); 
 
-    /
     char statusPayload[60];
     sprintf(statusPayload, "{\"grams\": %.1f, \"success\": true}", grams);
     client.publish(DISPENSE_STATUS_TOPIC, statusPayload);
-    Serial.println("Confirmação de dispensa (comando recebido) enviada ao Broker.");
+    Serial.println("Confirmação de dispensa enviada ao Broker.");
 }
 
+// --- VERIFICAÇÃO DE ALARMES (NOVO) ---
+void checkAlarms() {
+    struct tm timeinfo;
+    if(!getLocalTime(&timeinfo)){
+        return; // Ainda não sincronizou o relógio
+    }
 
+    // Verifica apenas uma vez por minuto
+    if (timeinfo.tm_min == lastCheckedMinute) return;
+    lastCheckedMinute = timeinfo.tm_min;
 
+    Serial.printf("Verificando alarmes para: %02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min);
 
-void saveCredentials(String ssid, String password) {
-    preferences.begin("appetite-creds", false); 
-    preferences.putString("user_ssid", ssid);
-    preferences.putString("user_password", password);
-    preferences.end();
-    Serial.println("Credenciais salvas na Flash.");
-}
-
-void clearCredentials() {
-    Serial.println("LIMPANDO CREDENCIAIS (FACTORY RESET)...");
-    preferences.begin("appetite-creds", false);
-    preferences.remove("user_ssid");
-    preferences.remove("user_password");
-    preferences.end();
-}
-
-void handleRoot() {
-    server.send(200, "text/plain", "Appetite Provisioning Mode - ESP32 AP");
-}
-
-void handleConfig() {
-    if (server.hasArg("ssid") && server.hasArg("password")) {
-        user_ssid = server.arg("ssid");
-        user_password = server.arg("password");
-        saveCredentials(user_ssid, user_password);
-        server.send(200, "text/plain", "Credenciais recebidas. Reiniciando...");
-        Serial.printf("Credenciais recebidas e salvas: SSID=%s\n", user_ssid.c_str());
-        delay(100);
-        ESP.restart(); 
-    } else {
-        server.send(400, "text/plain", "Faltando parâmetros de SSID/Senha.");
+    for (const auto& alarm : scheduledAlarms) {
+        if (alarm.active && alarm.hour == timeinfo.tm_hour && alarm.minute == timeinfo.tm_min) {
+            Serial.println("ALARME DISPARADO PELO ESP32!");
+            dispenseFood(alarm.grams);
+        }
     }
 }
 
-void startProvisioningMode() {
-    Serial.println("Entrando em MODO DE CONFIGURAÇÃO (Access Point)");
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASSWORD);
-    Serial.print("AP IP address: ");
-    Serial.println(WiFi.softAPIP());
-    server.on("/", HTTP_GET, handleRoot); 
-    server.on("/config", HTTP_POST, handleConfig); 
-    server.begin();
-}
-
-
-
+// --- MQTT CALLBACK ---
 void callback(char* topic, byte* payload, unsigned int length) {
     String message;
     for (int i = 0; i < length; i++) {
         message += (char)payload[i];
     }
-    Serial.printf("Mensagem recebida no topico: %s\n", topic);
+    Serial.printf("Mensagem no topico: %s\n", topic);
     
-    DynamicJsonDocument doc(1024); 
+    DynamicJsonDocument doc(2048); // Aumentei o buffer para caber a lista de alarmes
     DeserializationError error = deserializeJson(doc, message);
 
     if (error) {
-        Serial.println("Falha ao analisar JSON!");
+        Serial.print("Erro JSON: ");
+        Serial.println(error.c_str());
         return;
     }
 
+    // 1. COMANDO MANUAL
     if (strcmp(topic, COMMAND_MANUAL_TOPIC) == 0) {
         if (doc.containsKey("grams")) {
             double grams = doc["grams"].as<double>();
             dispenseFood(grams);
         }
     } 
+    // 2. ATUALIZAÇÃO DE ALARMES (NOVO)
     else if (strcmp(topic, COMMAND_ALARME_TOPIC) == 0) {
-        Serial.println("Nova lista de alarmes recebida. Salvando...");
-        
+        Serial.println("Recebendo nova lista de alarmes...");
+        scheduledAlarms.clear(); // Limpa a lista antiga
+
+        JsonArray arr = doc.as<JsonArray>();
+        for (JsonObject v : arr) {
+            Alarm newAlarm;
+            newAlarm.hour = v["hour"];
+            newAlarm.minute = v["minute"];
+            newAlarm.grams = v["grams"];
+            newAlarm.active = v["isActive"];
+            // Adiciona na lista
+            scheduledAlarms.push_back(newAlarm);
+            Serial.printf("Alarme salvo: %02d:%02d - %.1fg\n", newAlarm.hour, newAlarm.minute, newAlarm.grams);
+        }
+        Serial.println("Lista de alarmes atualizada no ESP32.");
     }
 }
 
-
 void reconnect_mqtt() {
     while (!client.connected()) {
-        Serial.print("Tentando conexao MQTT...");
-        
+        Serial.print("Conectando MQTT...");
         String lwtPayload = "offline";
-        
-        if (client.connect(mqttClientID, 
-                           STATUS_TOPIC,    
-                           1,               
-                           true,           
-                           lwtPayload.c_str() 
-                          )) {
-            Serial.println("conectado ao Broker!");
+        if (client.connect(mqttClientID, STATUS_TOPIC, 1, true, lwtPayload.c_str())) {
+            Serial.println("OK!");
             client.publish(STATUS_TOPIC, "online", true); 
             client.subscribe(COMMAND_MANUAL_TOPIC);
             client.subscribe(COMMAND_ALARME_TOPIC);
-            return; 
         } else {
-            Serial.print("falhou, rc=");
-            Serial.print(client.state()); 
-            Serial.println(" Tentando em 5 segundos.");
+            Serial.print("falha rc=");
+            Serial.print(client.state());
+            Serial.println(" tentando em 5s");
             delay(5000);
         }
     }
 }
 
+// --- FUNÇÕES AUXILIARES ---
+void saveCredentials(String ssid, String password) {
+    preferences.begin("appetite-creds", false); 
+    preferences.putString("user_ssid", ssid);
+    preferences.putString("user_password", password);
+    preferences.end();
+}
 
+void clearCredentials() {
+    preferences.begin("appetite-creds", false);
+    preferences.clear();
+    preferences.end();
+}
+
+void handleRoot() { server.send(200, "text/plain", "Appetite Provisioning Mode"); }
+
+void handleConfig() {
+    if (server.hasArg("ssid") && server.hasArg("password")) {
+        user_ssid = server.arg("ssid");
+        user_password = server.arg("password");
+        saveCredentials(user_ssid, user_password);
+        server.send(200, "text/plain", "Salvo. Reiniciando...");
+        delay(1000);
+        ESP.restart(); 
+    } else {
+        server.send(400, "text/plain", "Faltam dados.");
+    }
+}
+
+void startProvisioningMode() {
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(AP_SSID, AP_PASSWORD);
+    server.on("/", HTTP_GET, handleRoot); 
+    server.on("/config", HTTP_POST, handleConfig); 
+    server.begin();
+}
 
 void loadCredentials() {
     preferences.begin("appetite-creds", true); 
@@ -182,66 +208,40 @@ void loadCredentials() {
 
 void checkFactoryReset() {
     pinMode(FACTORY_RESET_PIN, INPUT_PULLUP); 
-    Serial.print("Verificando Factory Reset (GPIO 0)...");
-    delay(1000); 
-    
     if (digitalRead(FACTORY_RESET_PIN) == LOW) { 
-        Serial.println("\nBotão de Reset detectado! Mantenha pressionado por 5 segundos.");
-        long startTime = millis();
-        while(digitalRead(FACTORY_RESET_PIN) == LOW && (millis() - startTime < 5000)) {
-            Serial.print(".");
-            delay(500);
+        delay(100);
+        if (digitalRead(FACTORY_RESET_PIN) == LOW) {
+             Serial.println("Resetando...");
+             long start = millis();
+             while(digitalRead(FACTORY_RESET_PIN) == LOW && millis() - start < 5000) delay(100);
+             if(millis() - start >= 5000) {
+                 clearCredentials();
+                 ESP.restart();
+             }
         }
-        
-        if (millis() - startTime >= 5000) {
-            Serial.println("\nReset de Fábrica ativado!");
-            clearCredentials(); 
-            Serial.println("Credenciais apagadas. Reiniciando em modo AP.");
-            delay(1000);
-            ESP.restart();
-        } else {
-            Serial.println("\nReset cancelado (botão solto cedo demais).");
-        }
-    } else {
-        Serial.println("OK.");
     }
 }
 
 void setup_system_mode() {
-    Serial.println("--- INICIANDO MODO DE DECISÃO ---");
     loadCredentials();
-    
-    if (user_ssid.length() == 0 || user_password.length() == 0) {
-        Serial.println("Credenciais não encontradas. Entrando em Provisionamento.");
+    if (user_ssid == "" || user_password == "") {
         provisioned = false;
         return; 
     }
-    
-    Serial.printf("Tentando conectar a: %s\n", user_ssid.c_str());
     WiFi.mode(WIFI_STA); 
     WiFi.begin(user_ssid.c_str(), user_password.c_str());
-    
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20) { 
         delay(500);
-        Serial.print(".");
         attempts++;
     }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\nWiFi conectado! Entrando em MODO OPERACIONAL.");
-        provisioned = true;
-    } else {
-        Serial.println("\nFalha ao conectar ao Wi-Fi (Senha/Rede errada?). Entrando em MODO PROVISIONAMENTO.");
-        provisioned = false;
-    }
+    provisioned = (WiFi.status() == WL_CONNECTED);
 }
 
+// --- SETUP & LOOP ---
 
 void setup() {
     Serial.begin(115200);
-    delay(100); 
-    
     pinMode(MOTOR_PIN, OUTPUT);
     digitalWrite(MOTOR_PIN, LOW);
     
@@ -249,9 +249,9 @@ void setup() {
     setup_system_mode(); 
     
     if (provisioned) {
-        delay(1000); 
         configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
         client.setServer(mqttServer, mqttPort);
+        client.setBufferSize(2048);
         client.setCallback(callback);
     } else {
         startProvisioningMode();
@@ -260,31 +260,19 @@ void setup() {
 
 void loop() {
     if (provisioned) {
-     
+        if (WiFi.status() != WL_CONNECTED) ESP.restart();
         
-        if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("Conexão Wi-Fi perdida. Reiniciando para modo AP...");
-            delay(1000);
-            ESP.restart(); 
-        }
+        if (!client.connected()) reconnect_mqtt();
+        client.loop(); 
         
-        if (client.connected()) {
-            client.loop(); 
-        } else {
-            reconnect_mqtt(); 
-        }
-        
-      
+        checkAlarms(); // <--- O ESP32 AGORA CHECA OS ALARMES SOZINHO!
+
         if (motorIsRunning && (millis() >= motorStopTime)) {
-            Serial.println("Motor desligado (timer).");
             digitalWrite(MOTOR_PIN, LOW);
             motorIsRunning = false;
+            Serial.println("Motor desligado.");
         }
-        
-        
-        
     } else {
-        
         server.handleClient(); 
     }
 }

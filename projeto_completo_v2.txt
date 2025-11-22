@@ -1,0 +1,2269 @@
+﻿--- PUBSPEC.YAML ---
+name: appetite
+description: "A new Flutter project."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.3 <4.0.0' # Ajustei para uma versÃ£o mais comum e segura
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # --- TODAS AS DEPENDÃŠNCIAS DEVEM ESTAR ALINHADAS AQUI ---
+  flutter_local_notifications: ^17.0.0
+  timezone: ^0.9.2
+  uuid: ^4.4.0
+  provider: ^6.1.2
+  flutter_colorpicker: ^1.0.0
+  mqtt_client: ^10.0.0
+  http: ^1.2.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+
+--- ARQUIVO: main.dart ---
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+// Services
+import 'package:appetite/services/notification_service.dart';
+
+// Controllers (LÃ³gica)
+import 'package:appetite/controllers/themecontroller.dart';
+import 'package:appetite/controllers/alarmcontroller.dart';
+import 'package:appetite/controllers/homecontroller.dart';
+import 'package:appetite/controllers/historycontroller.dart';
+import 'package:appetite/controllers/provisioningcontroller.dart';
+
+// Core (Tema)
+import 'package:appetite/core/theme/apptheme.dart';
+
+// Views (Interface)
+import 'package:appetite/views/mainscreen.dart';
+
+void main() async {
+  // 1. Garante que o binding do Flutter esteja inicializado antes de serviÃ§os nativos
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // 2. Inicializa o serviÃ§o de notificaÃ§Ãµes antes do app rodar
+  // Isso garante que os canais de notificaÃ§Ã£o do Android estejam prontos
+  await NotificationService().init();
+
+  runApp(
+    MultiProvider(
+      providers: [
+        // --- CONTROLLERS INDEPENDENTES ---
+        ChangeNotifierProvider(create: (_) => ThemeController()),
+        ChangeNotifierProvider(create: (_) => HomeController()),
+        ChangeNotifierProvider(create: (_) => HistoryController()),
+
+        // --- CONTROLLERS DEPENDENTES (Usam ProxyProvider) ---
+        
+        // AlarmController precisa de HomeController (para enviar comando) 
+        // e HistoryController (para registrar sucesso/falha)
+        ChangeNotifierProxyProvider2<HomeController, HistoryController, AlarmController>(
+          create: (context) => AlarmController(
+            homeController: Provider.of<HomeController>(context, listen: false),
+            historyController: Provider.of<HistoryController>(context, listen: false),
+          ),
+          update: (context, homeCtrl, historyCtrl, previousAlarmCtrl) {
+            // MantÃ©m a instÃ¢ncia existente se possÃ­vel, apenas atualizando as dependÃªncias
+            return previousAlarmCtrl ?? AlarmController(
+              homeController: homeCtrl, 
+              historyController: historyCtrl
+            );
+          },
+        ),
+
+        // ProvisioningController precisa de HomeController (para conectar apÃ³s o setup)
+        ChangeNotifierProxyProvider<HomeController, ProvisioningController>(
+          create: (context) => ProvisioningController(
+            homeController: Provider.of<HomeController>(context, listen: false),
+          ),
+          update: (context, homeCtrl, previousProvCtrl) {
+            return previousProvCtrl ?? ProvisioningController(homeController: homeCtrl);
+          },
+        ),
+      ],
+      child: const MyApp(),
+    ),
+  );
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // 3. Escuta as mudanÃ§as de tema e tamanho para reconstruir o app todo se mudar
+    final themeController = Provider.of<ThemeController>(context);
+
+    return MaterialApp(
+      title: 'Appetite',
+      debugShowCheckedModeBanner: false,
+
+      // 4. Aplica o tema dinÃ¢mico (cor e fator de tamanho da fonte)
+      theme: buildAppTheme(
+        themeController.primaryColor,
+        themeController.fontSizeFactor,
+      ),
+
+      // 5. Define a tela inicial
+      home: const MainScreen(),
+    );
+  }
+}
+
+
+--- ARQUIVO: alarmcontroller.dart ---
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:appetite/models/alarmmodel.dart';
+import 'package:appetite/controllers/homecontroller.dart';
+import 'package:appetite/controllers/historycontroller.dart';
+import 'package:appetite/models/historyentrymodel.dart';
+import 'package:appetite/services/notification_service.dart';
+import 'package:uuid/uuid.dart';
+
+class AlarmController extends ChangeNotifier {
+  final Uuid _uuid = const Uuid();
+  Timer? _timer;
+
+  // Controladores externos que precisaremos acessar
+  final HomeController homeController;
+  final HistoryController historyController;
+
+  // Para evitar que o mesmo alarme dispare vÃ¡rias vezes no mesmo minuto
+  final Set<String> _triggeredAlarmsToday = {};
+  int _lastCheckedMinute = -1;
+
+  AlarmController({
+    required this.homeController,
+    required this.historyController,
+  }) {
+    // Inicia o monitoramento assim que o Controller Ã© criado
+    _startMonitoring();
+  }
+
+  // Lista privada de alarmes
+  final List<Alarm> _alarms = [
+    Alarm(
+      id: const Uuid().v4(),
+      time: const TimeOfDay(hour: 7, minute: 30),
+      grams: 50.0,
+      repeatDays: [1, 2, 3, 4, 5], // Seg a Sex
+      isActive: true,
+    ),
+  ];
+
+  List<Alarm> get alarms => _alarms;
+
+  // --- MONITORAMENTO DE TEMPO ---
+  void _startMonitoring() {
+    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      _checkAlarms();
+    });
+  }
+
+  void _checkAlarms() {
+    final now = DateTime.now();
+
+    if (now.minute == _lastCheckedMinute) return;
+    _lastCheckedMinute = now.minute;
+
+    if (now.hour == 0 && now.minute == 0) {
+      _triggeredAlarmsToday.clear();
+    }
+
+    for (final alarm in _alarms) {
+      if (!alarm.isActive) continue;
+      if (!alarm.repeatDays.contains(now.weekday)) continue;
+
+      if (alarm.time.hour == now.hour && alarm.time.minute == now.minute) {
+        _triggerAlarm(alarm);
+      }
+    }
+  }
+
+  void _triggerAlarm(Alarm alarm) {
+    final todayKey = "${alarm.id}_${DateTime.now().day}";
+
+    if (_triggeredAlarmsToday.contains(todayKey)) return;
+
+    // --- CORREÃ‡ÃƒO AQUI ---
+    // Usamos hour e minute diretamente em vez de .format(context)
+    String timeString =
+        "${alarm.time.hour.toString().padLeft(2, '0')}:${alarm.time.minute.toString().padLeft(2, '0')}";
+    print("ALARME DISPARADO: $timeString - ${alarm.grams}g");
+    // ---------------------
+
+    NotificationService().showAlarmNotification(
+      title: 'Hora de comer! ðŸ¾',
+      body:
+          'Dispensando ${alarm.grams.toStringAsFixed(0)}g de raÃ§Ã£o conforme programado.',
+    );
+
+    if (homeController.status == ConnectionStatus.connected) {
+      homeController.manualFeed(alarm.grams);
+
+      historyController.addEntry(
+        type: HistoryType.alarm,
+        description: 'Alarme automÃ¡tico executado.',
+        gramsDispensed: alarm.grams,
+      );
+    } else {
+      historyController.addEntry(
+        type: HistoryType.error,
+        description: 'Alarme falhou: App desconectado do alimentador.',
+      );
+      NotificationService().showAlarmNotification(
+        title: 'Falha no Alarme âš ï¸',
+        body:
+            'NÃ£o foi possÃ­vel conectar ao alimentador para o alarme das $timeString.',
+      );
+    }
+
+    _triggeredAlarmsToday.add(todayKey);
+
+    if (!alarm.isRepeatingWeekly && alarm.repeatDays.isEmpty) {
+      toggleAlarmActive(alarm.id);
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  // --- MÃ©todos CRUD ---
+  void addAlarm(
+      {required TimeOfDay time,
+      required double grams,
+      required List<int> days}) {
+    final newAlarm =
+        Alarm(id: _uuid.v4(), time: time, grams: grams, repeatDays: days);
+    _alarms.add(newAlarm);
+    notifyListeners();
+  }
+
+  void deleteAlarm(String alarmId) {
+    _alarms.removeWhere((alarm) => alarm.id == alarmId);
+    notifyListeners();
+  }
+
+  void toggleAlarmActive(String alarmId) {
+    final index = _alarms.indexWhere((alarm) => alarm.id == alarmId);
+    if (index != -1) {
+      _alarms[index].isActive = !_alarms[index].isActive;
+      notifyListeners();
+    }
+  }
+
+  void updateAlarm(Alarm updatedAlarm) {
+    final index = _alarms.indexWhere((alarm) => alarm.id == updatedAlarm.id);
+    if (index != -1) {
+      _alarms[index] = updatedAlarm;
+      notifyListeners();
+    }
+  }
+}
+
+
+--- ARQUIVO: historycontroller.dart ---
+// lib/controllers/history_controller.dart
+import 'package:flutter/material.dart';
+import 'package:appetite/models/historyentrymodel.dart';
+import 'package:uuid/uuid.dart'; // Para gerar IDs Ãºnicos
+
+class HistoryController extends ChangeNotifier {
+  final Uuid _uuid = const Uuid();
+  
+  // Lista privada de histÃ³rico (com alguns dados simulados para comeÃ§ar)
+  final List<HistoryEntry> _history = [
+    HistoryEntry(
+      id: const Uuid().v4(),
+      timestamp: DateTime.now().subtract(const Duration(hours: 1, minutes: 30)),
+      type: HistoryType.alarm,
+      description: 'Alarme das 08:00h concluÃ­do.',
+      gramsDispensed: 50.0,
+    ),
+    HistoryEntry(
+      id: const Uuid().v4(),
+      timestamp: DateTime.now().subtract(const Duration(hours: 3)),
+      type: HistoryType.manual,
+      description: 'Acionamento manual de 30g.',
+      gramsDispensed: 30.0,
+    ),
+    HistoryEntry(
+      id: const Uuid().v4(),
+      timestamp: DateTime.now().subtract(const Duration(days: 1, hours: 2)),
+      type: HistoryType.error,
+      description: 'Falha na conexÃ£o com ESP32 durante acionamento.',
+    ),
+  ];
+
+  // Getter que retorna a lista ordenada pela data mais recente
+  List<HistoryEntry> get history {
+    _history.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    return _history;
+  }
+
+  // MÃ©todo para adicionar uma nova entrada de histÃ³rico
+  void addEntry({
+    required HistoryType type,
+    required String description,
+    double? gramsDispensed,
+  }) {
+    final newEntry = HistoryEntry(
+      id: _uuid.v4(),
+      timestamp: DateTime.now(),
+      type: type,
+      description: description,
+      gramsDispensed: gramsDispensed,
+    );
+    _history.add(newEntry);
+    notifyListeners();
+  }
+}
+
+
+--- ARQUIVO: homecontroller.dart ---
+// lib/controllers/homecontroller.dart
+
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:appetite/services/esp32service.dart';
+
+enum ConnectionStatus { disconnected, connecting, connected, error }
+
+class HomeController extends ChangeNotifier {
+  final ESP32Service _service = ESP32Service();
+  ConnectionStatus _status = ConnectionStatus.disconnected;
+  String _message = "Toque para conectar ao Broker MQTT";
+
+  // Completer usado para forÃ§ar a funÃ§Ã£o de conexÃ£o a esperar a confirmaÃ§Ã£o do ESP32
+  Completer<bool>? _connectionCompleter;
+  String _alarmPayload = '[]';
+
+  ConnectionStatus get status => _status;
+  String get message => _message;
+
+  // Getter de status para compatibilidade com a HomeTab (retorna a string correta)
+  String get connectionStatus {
+    switch (_status) {
+      case ConnectionStatus.connected:
+        return "Conectado";
+      case ConnectionStatus.connecting:
+        return "Conectando...";
+      case ConnectionStatus.error:
+        return "Falha na ConexÃ£o";
+      case ConnectionStatus.disconnected:
+        return "Desconectado";
+    }
+  }
+
+  HomeController() {
+    _listenToBrokerMessages();
+  }
+
+  // --- ESCUTA DE MENSAGENS DO BROKER ---
+  void _listenToBrokerMessages() {
+    _service.messageStream.listen((payload) {
+      // 1. A ESP32 envia a mensagem "online"
+      if (payload == 'online') {
+        // Se a mensagem 'online' chegar e o status ainda nÃ£o for conectado, atualiza
+        if (_status != ConnectionStatus.connected) {
+          _status = ConnectionStatus.connected;
+          _message = "ConexÃ£o bem-sucedida! Dispositivo ONLINE.";
+          notifyListeners();
+        }
+
+        // 2. Resolve o Completer que estava esperando
+        if (_connectionCompleter?.isCompleted == false) {
+          _connectionCompleter!.complete(true);
+        }
+        return;
+      }
+
+      // ... (LÃ³gica de tratamento para outras mensagens: confirmaÃ§Ã£o de dispensa, etc.)
+      if (payload.contains('success')) {
+        _message = "Dispensa concluÃ­da com sucesso!";
+        notifyListeners();
+      }
+    });
+  }
+
+  // --- LÃ“GICA DE CONEXÃƒO COM ESPERA E TIMEOUT ---
+  Future<void> attemptConnection() async {
+    if (_status == ConnectionStatus.connecting ||
+        _status == ConnectionStatus.connected) {
+      return;
+    }
+
+    _status = ConnectionStatus.connecting;
+    _message = "Conectando ao Broker MQTT...";
+    notifyListeners();
+
+    // 1. Conecta ao Broker
+    bool brokerSuccess = await _service.connectToBroker();
+
+    if (!brokerSuccess) {
+      _status = ConnectionStatus.error;
+      _message = "Falha ao conectar ao Broker MQTT. Verifique sua rede.";
+      notifyListeners();
+      return;
+    }
+
+    // 2. ConexÃ£o com Broker OK. Agora, espera pela mensagem 'online' do ESP32
+    _message = "ConexÃ£o com Broker OK. Aguardando ESP32 (10s)...";
+    notifyListeners();
+
+    _connectionCompleter = Completer<bool>();
+
+    try {
+      // 3. Espera pela confirmaÃ§Ã£o do ESP32, com limite de 10 segundos
+      bool esp32Confirmed = await _connectionCompleter!.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => false,
+      );
+
+      if (!esp32Confirmed) {
+        _status = ConnectionStatus.error;
+        _message = "ConexÃ£o com ESP32 falhou (Timeout). Dispositivo offline.";
+        notifyListeners();
+      }
+    } on TimeoutException {
+      _status = ConnectionStatus.error;
+      _message = "ConexÃ£o com ESP32 falhou (Timeout). Dispositivo offline.";
+      notifyListeners();
+    } finally {
+      // Limpa o Completer para a prÃ³xima tentativa
+      _connectionCompleter = null;
+    }
+  }
+
+  void manualFeed(double grams) {
+    if (_status != ConnectionStatus.connected) {
+      _message = "Erro: Dispositivo nÃ£o conectado ou offline.";
+      notifyListeners();
+      return;
+    }
+
+    final payload =
+        '{"command": "feed_manual", "grams": ${grams.toStringAsFixed(1)}}';
+    _service.publishCommand('appetite/comando/manual', payload);
+
+    _message =
+        "Comando de ${grams.toStringAsFixed(1)}g enviado. Aguardando confirmaÃ§Ã£o...";
+    notifyListeners();
+  }
+
+  void sendAlarmConfiguration(String alarmsJson) {
+    if (_status != ConnectionStatus.connected) {
+      _message =
+          "Erro: Aplicativo nÃ£o conectado ao Broker. ConfiguraÃ§Ã£o salva localmente.";
+      notifyListeners();
+      return;
+    }
+
+    _alarmPayload = alarmsJson;
+    _service.publishCommand('appetite/comando/alarme', _alarmPayload);
+
+    _message = "ConfiguraÃ§Ã£o de alarmes enviada com sucesso.";
+    notifyListeners();
+  }
+
+  void disconnect() {
+    _service.disconnect();
+    _status = ConnectionStatus.disconnected;
+    _message = "Desconectado do Broker.";
+    notifyListeners();
+  }
+}
+
+
+--- ARQUIVO: provisioningcontroller.dart ---
+import 'package:flutter/material.dart';
+import 'package:appetite/services/provisioningservice.dart';
+import 'package:appetite/controllers/homecontroller.dart'; // Para tentar o MQTT no sucesso
+
+enum ProvisioningState {
+  initial,
+  userConnectingToAp, // UsuÃ¡rio deve mudar o Wi-Fi
+  sendingCredentials,
+  waitingForWifiConnection, // ESP32 estÃ¡ tentando conectar ao Wi-Fi domÃ©stico
+  success,
+  failure,
+}
+
+class ProvisioningController extends ChangeNotifier {
+  final ProvisioningService _service = ProvisioningService();
+  ProvisioningState _state = ProvisioningState.initial;
+  String _message = 'Bem-vindo! Para comeÃ§ar, prepare as credenciais do seu Wi-Fi domÃ©stico.';
+  
+  // ReferÃªncia ao HomeController (para disparar a conexÃ£o MQTT apÃ³s o setup)
+  final HomeController homeController;
+
+  ProvisioningController({required this.homeController});
+
+  ProvisioningState get state => _state;
+  String get message => _message;
+
+  // Nome da rede que o ESP32 deve criar (Deve ser igual ao ESP32!)
+  static const String ESP32_AP_NAME = 'Appetite_SETUP'; 
+
+  void startSetup() {
+    _state = ProvisioningState.userConnectingToAp;
+    _message = '1. Desconecte o Wi-Fi atual e conecte-se Ã  rede "${ESP32_AP_NAME}".';
+    notifyListeners();
+  }
+
+  Future<void> sendWifiCredentials(String ssid, String password) async {
+    _state = ProvisioningState.sendingCredentials;
+    _message = '2. Enviando credenciais do Wi-Fi domÃ©stico para o dispositivo...';
+    notifyListeners();
+
+    bool success = await _service.sendCredentials(ssid, password);
+
+    if (success) {
+      _state = ProvisioningState.waitingForWifiConnection;
+      _message = '3. Credenciais enviadas! Aguarde o dispositivo reiniciar e conectar Ã  sua rede...';
+      notifyListeners();
+      
+      // Simula o tempo que o ESP32 leva para reiniciar e conectar (10 segundos)
+      await Future.delayed(const Duration(seconds: 10)); 
+      
+      _state = ProvisioningState.success;
+      _message = 'ConfiguraÃ§Ã£o concluÃ­da! Voltando ao aplicativo e testando a conexÃ£o remota...';
+      notifyListeners();
+
+      // CRÃTICO: Tenta iniciar a conexÃ£o MQTT remota apÃ³s o provisionamento
+      homeController.attemptConnection(); 
+      
+    } else {
+      _state = ProvisioningState.failure;
+      _message = 'Falha ao enviar credenciais. Verifique se o celular ainda estÃ¡ conectado Ã  rede "${ESP32_AP_NAME}".';
+      notifyListeners();
+    }
+  }
+
+  void reset() {
+    _state = ProvisioningState.initial;
+    _message = 'Inicie a configuraÃ§Ã£o novamente.';
+    notifyListeners();
+  }
+}
+
+
+--- ARQUIVO: themecontroller.dart ---
+// lib/controllers/theme_controller.dart
+import 'package:flutter/material.dart';
+
+class ThemeController extends ChangeNotifier {
+  // Cor primÃ¡ria inicial
+  Color _primaryColor = Colors.blue;
+  
+  // Tamanho do texto inicial
+  double _fontSizeFactor = 1.0; 
+
+  Color get primaryColor => _primaryColor;
+  double get fontSizeFactor => _fontSizeFactor;
+
+  // MÃ©todo para mudar a cor (serÃ¡ chamado pelo painel RGB)
+  void setPrimaryColor(Color newColor) {
+    _primaryColor = newColor;
+    notifyListeners();
+  }
+  
+  // MÃ©todo para mudar o tamanho dos componentes/texto
+  void setFontSizeFactor(double newFactor) {
+    _fontSizeFactor = newFactor;
+    notifyListeners();
+  }
+}
+
+
+--- ARQUIVO: appcolors.dart ---
+// lib/core/constants/app_colors.dart
+import 'package:flutter/material.dart';
+
+// Cores fixas do app
+class AppColors {
+  static const Color darkBackground = Color(0xFF121212);
+  static const Color lightBackground = Color(0xFFFFFFFF);
+  static const Color accentColor = Color(0xFF4CAF50); // Verde de destaque
+  static const Color errorColor = Color(0xFFB00020);
+}
+
+
+--- ARQUIVO: strings.dart ---
+// lib/core/constants/strings.dart
+
+class AppStrings {
+  static const String appName = 'Appetite';
+
+  // NavegaÃ§Ã£o
+  static const String navHome = 'Home';
+  static const String navAlarmes = 'Alarmes';
+  static const String navHistorico = 'HistÃ³rico';
+  static const String navConfiguracoes = 'ConfiguraÃ§Ãµes';
+
+  // Alarmes
+  static const String alarmeNaoRepete = 'NÃ£o repete';
+  static const String alarmeVazio = 'Nenhum alarme configurado. Toque no "+" para adicionar.';
+  
+  // ConexÃ£o
+  static const String conexaoDesconectado = 'Toque para conectar';
+  static const String conexaoConectando = 'Conectando ao ESP32...';
+  static const String conexaoSucesso = 'ConexÃ£o bem-sucedida!';
+  static const String conexaoFalha = 'Falha ao conectar. Tente novamente.';
+}
+
+
+--- ARQUIVO: apptheme.dart ---
+// lib/core/theme/app_theme.dart
+
+// lib/core/theme/apptheme.dart (CORREÃ‡ÃƒO)
+
+import 'package:flutter/material.dart';
+// Mude para o import via package:
+import 'package:appetite/core/constants/appcolors.dart'; 
+
+// ... (Resto do cÃ³digo do buildAppTheme)
+
+// MODIFICAÃ‡ÃƒO: A funÃ§Ã£o agora recebe o fator de escala de fonte
+ThemeData buildAppTheme(Color primaryColor, double fontSizeFactor) {
+  // Define o TextTheme padrÃ£o, escalando cada tamanho pelo fator
+  final baseTextTheme = const TextTheme(
+    displayLarge: TextStyle(color: Colors.white, fontSize: 57),
+    displayMedium: TextStyle(color: Colors.white, fontSize: 45),
+    displaySmall: TextStyle(color: Colors.white, fontSize: 36),
+    headlineLarge: TextStyle(color: Colors.white, fontSize: 32),
+    headlineMedium: TextStyle(color: Colors.white, fontSize: 28),
+    headlineSmall: TextStyle(color: Colors.white, fontSize: 24),
+    titleLarge: TextStyle(color: Colors.white, fontSize: 22),
+    titleMedium: TextStyle(color: Colors.white, fontSize: 16),
+    titleSmall: TextStyle(color: Colors.white, fontSize: 14),
+    bodyLarge: TextStyle(color: Colors.white, fontSize: 16),
+    bodyMedium: TextStyle(color: Colors.white70, fontSize: 14),
+    bodySmall: TextStyle(color: Colors.white60, fontSize: 12),
+    labelLarge: TextStyle(color: Colors.black, fontSize: 14),
+    labelMedium: TextStyle(color: Colors.white70, fontSize: 12),
+    labelSmall: TextStyle(color: Colors.white60, fontSize: 11),
+  );
+
+  return ThemeData(
+    primaryColor: primaryColor, 
+    colorScheme: ColorScheme.fromSwatch().copyWith(
+      secondary: AppColors.accentColor,
+      primary: primaryColor,
+      brightness: Brightness.dark,
+    ),
+    scaffoldBackgroundColor: AppColors.darkBackground,
+    appBarTheme: AppBarTheme(
+      backgroundColor: AppColors.darkBackground,
+      // O tÃ­tulo do App Bar tambÃ©m deve escalar
+      titleTextStyle: baseTextTheme.titleLarge?.copyWith(
+        fontSize: (baseTextTheme.titleLarge?.fontSize ?? 22) * fontSizeFactor,
+        fontWeight: FontWeight.bold,
+      ),
+      elevation: 0,
+    ),
+    
+    // APLICAÃ‡ÃƒO GLOBAL: Usa o fator de escala no TextTheme.
+    textTheme: baseTextTheme.apply(
+        fontSizeFactor: fontSizeFactor,
+    ),
+
+    brightness: Brightness.dark,
+  );
+}
+
+
+--- ARQUIVO: alarmmodel.dart ---
+// lib/models/alarm_model.dart
+import 'package:flutter/material.dart';
+
+class Alarm {
+  // Um ID Ãºnico para facilitar a ediÃ§Ã£o e exclusÃ£o (importante para listas)
+  final String id;
+  
+  // O horÃ¡rio que o alarme irÃ¡ tocar
+  TimeOfDay time;
+  
+  // A quantidade em gramas a ser dispensada
+  double grams;
+  
+  // Lista de dias da semana (1=Seg, 2=Ter, ..., 7=Dom)
+  List<int> repeatDays;
+  
+  // Indica se o alarme estÃ¡ ativo ou desativado
+  bool isActive;
+  
+  // Indica se o alarme deve se repetir semanalmente (alÃ©m dos dias escolhidos)
+  bool isRepeatingWeekly;
+
+  Alarm({
+    required this.id,
+    required this.time,
+    required this.grams,
+    required this.repeatDays,
+    this.isActive = true, // Por padrÃ£o, o alarme Ã© criado ativo
+    this.isRepeatingWeekly = true,
+  });
+
+  // MÃ©todo para criar uma cÃ³pia do objeto (Ãºtil para ediÃ§Ã£o)
+  Alarm copyWith({
+    TimeOfDay? time,
+    double? grams,
+    List<int>? repeatDays,
+    bool? isActive,
+    bool? isRepeatingWeekly,
+  }) {
+    return Alarm(
+      id: id,
+      time: time ?? this.time,
+      grams: grams ?? this.grams,
+      repeatDays: repeatDays ?? this.repeatDays,
+      isActive: isActive ?? this.isActive,
+      isRepeatingWeekly: isRepeatingWeekly ?? this.isRepeatingWeekly,
+    );
+  }
+}
+
+
+--- ARQUIVO: historyentrymodel.dart ---
+// lib/models/history_entry_model.dart
+
+
+// Tipos de eventos possÃ­veis no histÃ³rico
+enum HistoryType { 
+  alarm, // Evento gerado por um alarme automÃ¡tico
+  manual, // Evento gerado por acionamento manual na HomeTab
+  error // Evento de erro (ex: falha de conexÃ£o ou dispensa)
+}
+
+class HistoryEntry {
+  final String id;
+  final DateTime timestamp; // Quando o evento ocorreu
+  final HistoryType type;   // O tipo de evento
+  final String description; // Detalhe do evento (ex: "Alarme das 7:00 concluÃ­do")
+  final double? gramsDispensed; // Quantidade dispensada (opcional)
+
+  HistoryEntry({
+    required this.id,
+    required this.timestamp,
+    required this.type,
+    required this.description,
+    this.gramsDispensed,
+  });
+}
+
+
+--- ARQUIVO: esp32service.dart ---
+// lib/services/esp32service.dart (CÃ“DIGO FINAL E CORRETO PARA MQTT)
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:mqtt_client/mqtt_client.dart';
+import 'package:mqtt_client/mqtt_server_client.dart';
+
+class ESP32Service {
+  // ConfiguraÃ§Ãµes do Broker MQTT (Usamos um exemplo pÃºblico para testes)
+  static const String brokerHost = 'test.mosquitto.org';
+  static const int brokerPort = 1883;
+  static const String clientId = 'flutter_appetite_client';
+
+  MqttServerClient? client;
+
+  // Stream para enviar mensagens recebidas do ESP32 para o Controller
+  final StreamController<String> _messageController =
+      StreamController<String>.broadcast();
+  Stream<String> get messageStream =>
+      _messageController.stream; // <-- DEFINIÃ‡ÃƒO CORRETA
+
+  // --- 1. CONEXÃƒO COM O BROKER ---
+  Future<bool> connectToBroker() async {
+    // <-- DEFINIÃ‡ÃƒO CORRETA
+    // Usando os nomes de constantes
+    client = MqttServerClient(brokerHost, clientId);
+    client!.port = brokerPort;
+
+    client!.logging(on: false);
+    client!.keepAlivePeriod = 20;
+    client!.onConnected = onConnected;
+    client!.onDisconnected = onDisconnected;
+
+    try {
+      final MqttConnectMessage connMess = MqttConnectMessage()
+          .withClientIdentifier(clientId)
+          .startClean()
+          .withWillQos(MqttQos.atLeastOnce);
+
+      client!.connectionMessage = connMess;
+
+      await client!.connect();
+    } on Exception catch (e) {
+      if (kDebugMode) {
+        print('Erro de ConexÃ£o MQTT: $e');
+      }
+      client!.disconnect();
+      return false;
+    }
+
+    if (client!.connectionStatus!.state == MqttConnectionState.connected) {
+      // 2. Assinar tÃ³picos (para receber status do ESP32)
+      client!.subscribe('appetite/status/#', MqttQos.atLeastOnce);
+
+      // 3. Configurar callback para receber mensagens
+      client!.updates!.listen((List<MqttReceivedMessage<MqttMessage>> c) {
+        final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
+        final String payload = MqttPublishPayload.bytesToStringAsString(
+          recMess.payload.message,
+        );
+
+        _messageController.add(payload);
+
+        if (kDebugMode) {
+          print('MQTT Mensagem recebida no tÃ³pico ${c[0].topic}: $payload');
+        }
+      });
+
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  void onConnected() {
+    if (kDebugMode) {
+      print('MQTT: Conectado ao Broker!');
+    }
+  }
+
+  void onDisconnected() {
+    if (kDebugMode) {
+      print('MQTT: Desconectado do Broker.');
+    }
+  }
+
+  // --- 4. PUBLICAR COMANDOS ---
+  void publishCommand(String topic, String payload) {
+    // <-- DEFINIÃ‡ÃƒO CORRETA
+    if (client?.connectionStatus?.state != MqttConnectionState.connected) {
+      if (kDebugMode) {
+        print('MQTT: NÃ£o conectado ao Broker. Comando nÃ£o enviado.');
+      }
+      return;
+    }
+
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(payload);
+
+    client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
+
+    if (kDebugMode) {
+      print('MQTT: Comando publicado para o tÃ³pico $topic');
+    }
+  }
+
+  void disconnect() {
+    client?.disconnect();
+  }
+}
+
+
+--- ARQUIVO: notification_service.dart ---
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+class NotificationService {
+  // Singleton - garante que sÃ³ existe uma instÃ¢ncia do gerenciador de notificaÃ§Ãµes
+  static final NotificationService _instance = NotificationService._internal();
+  factory NotificationService() => _instance;
+  NotificationService._internal();
+
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  Future<void> init() async {
+    // ConfiguraÃ§Ã£o para Android
+    // VocÃª precisarÃ¡ adicionar um Ã­cone chamado 'app_icon' na pasta android/app/src/main/res/drawable
+    // Por enquanto, podemos usar o padrÃ£o '@mipmap/ic_launcher'
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    // ConfiguraÃ§Ã£o Geral
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+
+    await flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      // Opcional: o que acontece quando toca na notificaÃ§Ã£o
+      onDidReceiveNotificationResponse: (details) {
+        // LÃ³gica para abrir o app em uma tela especÃ­fica se quiser
+      },
+    );
+  }
+
+  // FunÃ§Ã£o para exibir a notificaÃ§Ã£o imediatamente
+  Future<void> showAlarmNotification({required String title, required String body}) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'alarm_channel_id', // ID Ãºnico do canal
+      'Alarmes Appetite', // Nome visÃ­vel nas configuraÃ§Ãµes do Android
+      channelDescription: 'NotificaÃ§Ãµes para os horÃ¡rios de alimentaÃ§Ã£o',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      // sound: RawResourceAndroidNotificationSound('alarm_sound'), // Se quiser um som personalizado depois
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
+
+    await flutterLocalNotificationsPlugin.show(
+      0, // ID da notificaÃ§Ã£o (0 porque podemos substituir a anterior se jÃ¡ tiver uma)
+      title,
+      body,
+      platformChannelSpecifics,
+    );
+  }
+}
+
+
+--- ARQUIVO: provisioningservice.dart ---
+import 'package:http/http.dart' as http;
+//import 'dart:convert';
+
+class ProvisioningService {
+  // EndereÃ§o fixo do ESP32 quando estÃ¡ no modo Access Point (SoftAP)
+  static const String AP_URL = 'http://192.168.4.1/config';
+
+  /// Envia o SSID e a senha do Wi-Fi domÃ©stico do usuÃ¡rio para o ESP32.
+  Future<bool> sendCredentials(String ssid, String password) async {
+    try {
+      final response = await http.post(
+        Uri.parse(AP_URL),
+        // O corpo da requisiÃ§Ã£o deve corresponder ao que o ESP32 espera (chave/valor)
+        body: {
+          'ssid': ssid,
+          'password': password,
+        },
+      );
+
+      // O ESP32 deve retornar um status 200 (OK) se receber as credenciais.
+      if (response.statusCode == 200 &&
+          response.body.contains("Credenciais recebidas")) {
+        return true;
+      } else {
+        // Log detalhado de falha de comunicaÃ§Ã£o
+        print("Provisioning Failure: Status ${response.statusCode}, Body: ${response.body}");
+        return false;
+      }
+    } catch (e) {
+      // Falha de rede: geralmente significa que o celular nÃ£o estÃ¡ conectado ao AP do ESP32
+      print("Provisioning Error: Celular nÃ£o conectado ao AP do ESP32 (192.168.4.1 inacessÃ­vel). Erro: $e");
+      return false;
+    }
+  }
+}
+
+
+--- ARQUIVO: historytab.dart ---
+// lib/views/history_tab.dart
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:appetite/controllers/historycontroller.dart';
+import 'package:appetite/models/historyentrymodel.dart';
+
+
+class HistoryTab extends StatelessWidget {
+  const HistoryTab({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<HistoryController>(
+      builder: (context, controller, child) {
+        if (controller.history.isEmpty) {
+          return const Center(
+            child: Text(
+              'Nenhum histÃ³rico de atividade registrado.',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.symmetric(vertical: 8.0),
+          itemCount: controller.history.length,
+          itemBuilder: (context, index) {
+            final entry = controller.history[index];
+            return _HistoryItemCard(entry: entry);
+          },
+        );
+      },
+    );
+  }
+}
+
+// Widget privado para exibir um item do histÃ³rico
+class _HistoryItemCard extends StatelessWidget {
+  final HistoryEntry entry;
+  
+  const _HistoryItemCard({required this.entry});
+
+  Map<String, dynamic> _getStyle(HistoryType type, ThemeData theme) {
+    switch (type) {
+      case HistoryType.alarm:
+        return {'icon': Icons.alarm_on, 'color': theme.primaryColor};
+      case HistoryType.manual:
+        return {'icon': Icons.touch_app, 'color': theme.colorScheme.secondary};
+      case HistoryType.error:
+        return {'icon': Icons.warning_amber, 'color': Colors.red.shade400};
+      //default:
+        //return {'icon': Icons.info_outline, 'color': Colors.grey};
+    }
+  }
+
+  String _formatDateTime(DateTime dt) {
+    return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')} - ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = _getStyle(entry.type, theme);
+
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: (style['color'] as Color).withAlpha((255 * 0.2).toInt()),
+        child: Icon(style['icon'], color: style['color']),
+      ),
+      title: Text(
+        entry.description,
+        style: theme.textTheme.titleMedium?.copyWith(color: Colors.white),
+      ),
+      subtitle: Text(
+        _formatDateTime(entry.timestamp),
+        style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
+      ),
+      trailing: entry.gramsDispensed != null
+          ? Text(
+              '${entry.gramsDispensed!.toStringAsFixed(1)}g',
+              style: theme.textTheme.titleLarge?.copyWith(
+                color: theme.primaryColor,
+                fontWeight: FontWeight.bold,
+              ),
+            )
+          : null,
+    );
+  }
+}
+
+
+--- ARQUIVO: hometab.dart ---
+// lib/views/hometab.dart (IU AMIGÃVEL E CORRIGIDA)
+
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:appetite/controllers/homecontroller.dart';
+import 'package:appetite/views/widgets/provisioningscreen.dart'; 
+import 'package:appetite/controllers/themecontroller.dart';
+
+class HomeTab extends StatefulWidget {
+  const HomeTab({super.key});
+
+  @override
+  State<HomeTab> createState() => _HomeTabState();
+}
+
+class _HomeTabState extends State<HomeTab> {
+  final TextEditingController _gramsController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Tenta conectar assim que a tela Ã© carregada
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Provider.of<HomeController>(context, listen: false).attemptConnection();
+    });
+  }
+
+  @override
+  void dispose() {
+    _gramsController.dispose();
+    super.dispose();
+  }
+
+  // LÃ³gica para alimentar e mostrar feedback
+  void _performManualFeed(HomeController controller) {
+    final gramsText = _gramsController.text;
+    final grams = double.tryParse(gramsText);
+
+    if (grams == null || grams <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Por favor, insira uma quantidade vÃ¡lida de raÃ§Ã£o.'),
+        ),
+      );
+      return;
+    }
+
+    // CORREÃ‡ÃƒO CRÃTICA: 
+    // A verificaÃ§Ã£o de "pode alimentar" agora usa o Enum 'status' (o estado real),
+    // e nÃ£o a String 'message' (que muda para "Comando enviado...").
+    // Isso corrige o bug de "travamento" do botÃ£o.
+    if (controller.status == ConnectionStatus.connected) {
+      controller.manualFeed(grams);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Comando de alimentaÃ§Ã£o de $grams gramas enviado com sucesso!',
+          ),
+        ),
+      );
+      _gramsController.clear();
+    } else {
+      // Esta mensagem agora sÃ³ aparece se o MQTT realmente cair
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Erro: Dispositivo offline. Tente reconectar.',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final themeController = Provider.of<ThemeController>(context);
+
+    return Consumer<HomeController>(
+      builder: (context, controller, child) {
+        
+        // Usamos o Enum para lÃ³gica e a String 'message' para exibiÃ§Ã£o
+        final statusEnum = controller.status;
+        final statusMessage = controller.message; 
+        
+        // A UI agora Ã© habilitada pelo Enum 'status', nÃ£o pela 'message'
+        final isConnected = (statusEnum == ConnectionStatus.connected);
+
+        return Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // === NOVA ÃREA DE STATUS DINÃ‚MICA ===
+                _buildDynamicStatusUI(context, statusEnum, statusMessage, themeController.primaryColor),
+
+                const SizedBox(height: 32),
+
+                // === UI PARA ALIMENTAÃ‡ÃƒO MANUAL ===
+                Text(
+                  'AlimentaÃ§Ã£o Manual',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white),
+                ),
+                const SizedBox(height: 16),
+
+                // Campo de entrada para gramas
+                TextField(
+                  controller: _gramsController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Quantidade de RaÃ§Ã£o (gramas)',
+                    hintText: 'Ex: 5.0',
+                    border: OutlineInputBorder(),
+                  ),
+                  enabled: isConnected, // Habilitado pelo Enum
+                  style: const TextStyle(color: Colors.white),
+                ),
+                const SizedBox(height: 16),
+
+                // BotÃ£o de Alimentar
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: isConnected // Habilitado pelo Enum
+                        ? () => _performManualFeed(controller)
+                        : null, 
+                    icon: const Icon(Icons.send),
+                    label: const Text('Alimentar Agora'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: themeController.primaryColor,
+                      foregroundColor: Colors.black,
+                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // NOVO WIDGET: Status de ConexÃ£o AmigÃ¡vel
+  Widget _buildDynamicStatusUI(BuildContext context, ConnectionStatus status, String message, Color themeColor) {
+    IconData icon;
+    Color color;
+    String friendlyMessage;
+    bool showConfigButton = false;
+
+    switch (status) {
+      case ConnectionStatus.connected:
+        icon = Icons.cloud_done_rounded;
+        color = Colors.green;
+        friendlyMessage = "Dispositivo Online";
+        break;
+      case ConnectionStatus.connecting:
+        icon = Icons.cloud_sync_rounded;
+        color = Colors.orange;
+        friendlyMessage = "Conectando...";
+        break;
+      case ConnectionStatus.error:
+        icon = Icons.cloud_off_rounded;
+        color = Colors.red;
+        friendlyMessage = "Dispositivo Offline";
+        showConfigButton = true;
+        break;
+      case ConnectionStatus.disconnected:
+      default:
+        icon = Icons.cloud_off_rounded;
+        color = Colors.grey;
+        friendlyMessage = "Dispositivo Desconectado";
+        showConfigButton = true;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24.0),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 60, color: color),
+          const SizedBox(height: 16),
+          Text(
+            friendlyMessage,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(color: color, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            message, // A mensagem tÃ©cnica (ex: "Aguardando ESP32...")
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+            textAlign: TextAlign.center,
+          ),
+          
+          // BotÃ£o de ConfiguraÃ§Ã£o/ReconexÃ£o
+          if (showConfigButton)
+            Padding(
+              padding: const EdgeInsets.only(top: 20.0),
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const ProvisioningScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.settings),
+                label: const Text('Configurar/Reconfigurar Wi-Fi'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: themeColor,
+                  foregroundColor: Colors.black,
+                  textStyle: const TextStyle(fontWeight: FontWeight.bold)
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+
+--- ARQUIVO: mainscreen.dart ---
+// lib/views/main_screen.dart
+import 'package:flutter/material.dart';
+import 'package:appetite/views/widgets/bottomnavbar.dart';
+import 'hometab.dart'; 
+import 'historytab.dart';
+import 'settingstab.dart';
+// Importamos a pasta inteira para a aba de alarmes
+import 'alarmtab/alarmlistview.dart'; 
+
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
+
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  int _selectedIndex = 1; // ComeÃ§a na aba 'Alarmes' (Ã­ndice 1)
+
+  // Lista dos widgets de cada aba
+  final List<Widget> _tabs = [
+    const HomeTab(),      // 0: Home (ConexÃ£o ESP32)
+    const AlarmListView(),// 1: Alarmes
+    const HistoryTab(),   // 2: HistÃ³rico
+    const SettingsTab(),  // 3: ConfiguraÃ§Ãµes
+  ];
+
+  // TÃ­tulo do AppBar para cada aba
+  final List<String> _titles = [
+    'Appetite - ConexÃ£o',
+    'Appetite - Alarmes',
+    'Appetite - HistÃ³rico',
+    'Appetite - ConfiguraÃ§Ãµes',
+  ];
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_titles[_selectedIndex]),
+        centerTitle: true,
+      ),
+      
+      // O corpo exibe a aba selecionada
+      body: _tabs[_selectedIndex], 
+      
+      // A barra de navegaÃ§Ã£o inferior
+      bottomNavigationBar: CustomBottomNavBar(
+        selectedIndex: _selectedIndex,
+        onItemSelected: _onItemTapped,
+      ),
+    );
+  }
+}
+
+
+--- ARQUIVO: settingstab.dart ---
+// lib/views/settings_tab.dart
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:appetite/controllers/themecontroller.dart';
+import 'package:appetite/core/constants/appcolors.dart';
+
+class SettingsTab extends StatelessWidget {
+  const SettingsTab({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final themeController = Provider.of<ThemeController>(context);
+    final theme = Theme.of(context);
+
+    return ListView(
+      padding: const EdgeInsets.all(16.0),
+      children: [
+        // TÃ­tulo da SeÃ§Ã£o
+        Text(
+          'PersonalizaÃ§Ã£o da Interface',
+          style: theme.textTheme.titleLarge?.copyWith(
+            color: theme.primaryColor,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const Divider(color: Colors.white12),
+
+        // --- 1. PAINEL DE CORES RGB (MUDANÃ‡A DE TEMA) ---
+        _buildColorThemeSection(context, themeController),
+        const SizedBox(height: 30),
+
+        // --- 2. TAMANHO DOS COMPONENTES/TEXTO ---
+        _buildFontSizeSection(themeController, theme),
+        const SizedBox(height: 30),
+
+        // --- 3. OUTRAS CONFIGURAÃ‡Ã•ES (Linguagem) ---
+        Text(
+          'Outras ConfiguraÃ§Ãµes',
+          style: theme.textTheme.titleLarge?.copyWith(
+            color: theme.primaryColor,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const Divider(color: Colors.white12),
+        
+        _buildLanguageSetting(theme),
+      ],
+    );
+  }
+
+  Widget _buildColorThemeSection(BuildContext context, ThemeController controller) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Cor Principal do Tema:',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 10),
+        
+        ListTile(
+          title: const Text('Cor Atual'),
+          trailing: Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: controller.primaryColor,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white54, width: 2),
+            ),
+          ),
+          onTap: () {
+            _showColorPickerDialog(context, controller);
+          },
+        ),
+      ],
+    );
+  }
+  
+  void _showColorPickerDialog(BuildContext context, ThemeController controller) {
+    Color pickerColor = controller.primaryColor;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.darkBackground,
+        title: const Text('Selecione a Cor Principal'),
+        content: SingleChildScrollView(
+          child: ColorPicker(
+            pickerColor: pickerColor,
+            onColorChanged: (color) {
+              pickerColor = color;
+            },
+            colorPickerWidth: 300.0,
+            pickerAreaHeightPercent: 0.7,
+            enableAlpha: false,
+            displayThumbColor: true,
+            paletteType: PaletteType.hsv,
+            labelTypes: const [],
+            pickerAreaBorderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(2.0),
+              topRight: Radius.circular(2.0),
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            child: const Text('SALVAR', style: TextStyle(color: Colors.white)),
+            onPressed: () {
+              controller.setPrimaryColor(pickerColor);
+              Navigator.of(context).pop();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFontSizeSection(ThemeController controller, ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Tamanho dos Componentes/Texto (Fator: ${controller.fontSizeFactor.toStringAsFixed(1)}x)',
+          style: theme.textTheme.titleMedium,
+        ),
+        Slider(
+          value: controller.fontSizeFactor,
+          min: 0.8,
+          max: 1.5,
+          divisions: 7,
+          label: controller.fontSizeFactor.toStringAsFixed(1),
+          onChanged: (double value) {
+            controller.setFontSizeFactor(value);
+          },
+          activeColor: theme.primaryColor,
+          inactiveColor: Colors.white30,
+        ),
+        Text(
+          'Exemplo de texto.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontSize: (theme.textTheme.bodyMedium?.fontSize ?? 14) * controller.fontSizeFactor,
+            color: Colors.white,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLanguageSetting(ThemeData theme) {
+    return ListTile(
+      leading: Icon(Icons.language, color: theme.primaryColor),
+      title: const Text('Idioma'),
+      trailing: DropdownButton<String>(
+        value: 'PortuguÃªs',
+        dropdownColor: AppColors.darkBackground,
+        style: theme.textTheme.bodyLarge,
+        items: <String>['PortuguÃªs', 'English']
+            .map<DropdownMenuItem<String>>((String value) {
+          return DropdownMenuItem<String>(
+            value: value,
+            child: Text(value),
+          );
+        }).toList(),
+        onChanged: (String? newValue) {
+          // LÃ³gica de mudanÃ§a de idioma
+        },
+      ),
+    );
+  }
+}
+
+
+--- ARQUIVO: addalarmdialog.dart ---
+// lib/views/alarms_tab/add_alarm_dialog.dart
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:appetite/controllers/alarmcontroller.dart';
+import 'package:appetite/models/alarmmodel.dart';
+import 'package:appetite/core/constants/appcolors.dart';
+
+class AddAlarmDialog extends StatefulWidget {
+  final Alarm? alarmToEdit; 
+
+  const AddAlarmDialog({super.key, this.alarmToEdit});
+
+  @override
+  State<AddAlarmDialog> createState() => _AddAlarmDialogState();
+}
+
+class _AddAlarmDialogState extends State<AddAlarmDialog> {
+  late TimeOfDay _selectedTime;
+  late List<int> _selectedDays;
+  late bool _isRepeatingWeekly;
+  late TextEditingController _gramsController;
+  late String _title;
+
+  @override
+  void initState() {
+    super.initState();
+    final isEditing = widget.alarmToEdit != null;
+    final alarm = widget.alarmToEdit;
+
+    _title = isEditing ? 'Editar Alarme' : 'Adicionar Novo Alarme';
+    
+    _selectedTime = alarm?.time ?? TimeOfDay.now();
+    _selectedDays = alarm?.repeatDays ?? [DateTime.now().weekday]; 
+    _isRepeatingWeekly = alarm?.isRepeatingWeekly ?? true;
+    _gramsController = TextEditingController(text: alarm?.grams.toStringAsFixed(0) ?? '50');
+  }
+
+  Future<void> _selectTime() async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: _selectedTime,
+      builder: (context, child) {
+        return Theme(
+          data: ThemeData.dark().copyWith(
+            colorScheme: ColorScheme.dark(
+              primary: Theme.of(context).primaryColor,
+              onPrimary: Colors.black,
+              surface: AppColors.darkBackground,
+              onSurface: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null && picked != _selectedTime) {
+      setState(() {
+        _selectedTime = picked;
+      });
+    }
+  }
+
+  void _toggleDay(int day) {
+    setState(() {
+      if (_selectedDays.contains(day)) {
+        _selectedDays.remove(day);
+      } else {
+        _selectedDays.add(day);
+      }
+      _selectedDays.sort();
+    });
+  }
+  
+  void _saveAlarm() {
+    final controller = Provider.of<AlarmController>(context, listen: false);
+    
+    if (_gramsController.text.isEmpty || double.tryParse(_gramsController.text) == null) {
+       return; 
+    }
+    
+    final double grams = double.parse(_gramsController.text);
+    
+    if (widget.alarmToEdit == null) {
+      // ADICIONAR NOVO ALARME
+      controller.addAlarm(
+        time: _selectedTime,
+        grams: grams,
+        days: _selectedDays,
+      );
+    } else {
+      // EDITAR ALARME EXISTENTE
+      final updatedAlarm = widget.alarmToEdit!.copyWith(
+        time: _selectedTime,
+        grams: grams,
+        repeatDays: _selectedDays,
+        isRepeatingWeekly: _isRepeatingWeekly,
+      );
+      controller.updateAlarm(updatedAlarm);
+    }
+
+    Navigator.pop(context); 
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isEditing = widget.alarmToEdit != null;
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.9, 
+      padding: const EdgeInsets.all(24.0),
+      decoration: const BoxDecoration(
+        color: AppColors.darkBackground,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            _title,
+            style: theme.textTheme.headlineSmall?.copyWith(color: theme.primaryColor),
+            textAlign: TextAlign.center,
+          ),
+          const Divider(color: Colors.white10),
+          
+          // 1. SELEÃ‡ÃƒO DE HORA
+          ListTile(
+            leading: Icon(Icons.access_time, color: theme.primaryColor),
+            title: Text(
+              'Hora: ${_selectedTime.format(context)}',
+              style: theme.textTheme.titleLarge,
+            ),
+            trailing: const Icon(Icons.edit, color: Colors.white70),
+            onTap: _selectTime,
+          ),
+          const SizedBox(height: 16),
+          
+          // 2. SELEÃ‡ÃƒO DE GRAMAS
+          TextField(
+            controller: _gramsController,
+            keyboardType: TextInputType.number,
+            style: theme.textTheme.titleLarge?.copyWith(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: 'Quantidade em Gramas',
+              labelStyle: TextStyle(color: theme.primaryColor),
+              suffixText: 'g',
+              suffixStyle: theme.textTheme.titleMedium,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10.0),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white54),
+                borderRadius: BorderRadius.circular(10.0),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // 3. SELEÃ‡ÃƒO DE DIAS DA SEMANA
+          Text('Dias da Semana:', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: List.generate(7, (index) {
+              final day = index + 1; // 1 = Segunda, 7 = Domingo
+              final dayName = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'][index];
+              final isSelected = _selectedDays.contains(day);
+
+              return GestureDetector(
+                onTap: () => _toggleDay(day),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: isSelected ? theme.primaryColor : Colors.grey.shade700,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    dayName,
+                    style: TextStyle(
+                      color: isSelected ? Colors.black : Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 24),
+          
+          // 4. REPETIR SEMANALMENTE
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Repetir Semanalmente:', style: theme.textTheme.titleMedium),
+              Switch(
+                value: _isRepeatingWeekly,
+                onChanged: (val) {
+                  setState(() {
+                    _isRepeatingWeekly = val;
+                  });
+                },
+                activeTrackColor: theme.colorScheme.secondary,
+              ),
+            ],
+          ),
+          
+          const Spacer(),
+          
+          // BotÃ£o de Salvar/Atualizar
+          ElevatedButton(
+            onPressed: _saveAlarm,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: theme.primaryColor,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: Text(
+              isEditing ? 'Atualizar Alarme' : 'Salvar Alarme',
+              style: theme.textTheme.labelLarge?.copyWith(fontSize: 18),
+            ),
+          ),
+          const SizedBox(height: 8),
+          
+          // BotÃ£o de Cancelar
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+--- ARQUIVO: alarmitemcard.dart ---
+// lib/views/alarms_tab/alarm_item_card.dart
+import 'package:flutter/material.dart';
+import 'package:appetite/models/alarmmodel.dart';
+import 'package:appetite/core/constants/appcolors.dart';
+
+class AlarmItemCard extends StatelessWidget {
+  final Alarm alarm;
+  final VoidCallback onToggle;
+  final VoidCallback onDelete;
+  final VoidCallback onEdit;
+
+  const AlarmItemCard({
+    super.key,
+    required this.alarm,
+    required this.onToggle,
+    required this.onDelete,
+    required this.onEdit,
+  });
+
+  String _formatDays(List<int> days) {
+    if (days.isEmpty) return 'NÃ£o repete';
+    
+    final dayMap = {1: 'SEG', 2: 'TER', 3: 'QUA', 4: 'QUI', 5: 'SEX', 6: 'SAB', 7: 'DOM'};
+    
+    return days.map((day) => dayMap[day]).whereType<String>().join(', ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return Card(
+      color: alarm.isActive ? AppColors.darkBackground : Colors.grey.shade800,
+      margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+      elevation: 4,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Hora do Alarme
+            Text(
+              alarm.time.format(context),
+              style: theme.textTheme.headlineLarge?.copyWith(
+                color: alarm.isActive ? theme.primaryColor : Colors.white54,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            
+            const SizedBox(width: 20),
+            
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Quantidade em Gramas
+                  Text(
+                    '${alarm.grams.toStringAsFixed(1)} gramas',
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      color: alarm.isActive ? Colors.white : Colors.white54,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  // Dias da Semana
+                  Text(
+                    _formatDays(alarm.repeatDays),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: alarm.isActive ? Colors.white70 : Colors.white38,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            // Switch para Ativar/Desativar
+            Switch(
+              value: alarm.isActive,
+              onChanged: (val) => onToggle(),
+              activeTrackColor: theme.colorScheme.secondary,
+            ),
+            
+            // BotÃ£o de OpÃ§Ãµes (Editar e Excluir)
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                if (value == 'edit') {
+                  onEdit();
+                } else if (value == 'delete') {
+                  onDelete();
+                }
+              },
+              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                const PopupMenuItem<String>(
+                  value: 'edit',
+                  child: Text('Editar'),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'delete',
+                  child: Text('Excluir'),
+                ),
+              ],
+              icon: const Icon(Icons.more_vert, color: Colors.white70),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+--- ARQUIVO: alarmlistview.dart ---
+// lib/views/alarms_tab/alarm_list_view.dart
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:appetite/controllers/alarmcontroller.dart';
+import 'package:appetite/models/alarmmodel.dart';
+import 'package:appetite/views/alarmtab/alarmitemcard.dart';
+import 'package:appetite/views/alarmtab/addalarmdialog.dart';
+
+class AlarmListView extends StatelessWidget {
+  const AlarmListView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AlarmController>(
+      builder: (context, controller, child) {
+        if (controller.alarms.isEmpty) {
+          return const Center(
+            child: Text(
+              'Nenhum alarme configurado. Toque no "+" para adicionar.',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
+
+        return Stack(
+          children: [
+            // A Lista ScrollÃ¡vel de Alarmes
+            ListView.builder(
+              itemCount: controller.alarms.length,
+              itemBuilder: (context, index) {
+                final alarm = controller.alarms[index];
+                return AlarmItemCard(
+                  alarm: alarm,
+                  onToggle: () => controller.toggleAlarmActive(alarm.id),
+                  onDelete: () => controller.deleteAlarm(alarm.id),
+                  onEdit: () => _showAddEditAlarm(context, controller, alarm),
+                );
+              },
+            ),
+
+            // O BotÃ£o Flutuante Centralizado na parte Inferior
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 24.0), 
+                child: FloatingActionButton(
+                  onPressed: () => _showAddEditAlarm(context, controller), 
+                  backgroundColor: Theme.of(context).primaryColor,
+                  shape: const CircleBorder(),
+                  child: const Icon(Icons.add, size: 30.0, color: Colors.black),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showAddEditAlarm(BuildContext context, AlarmController controller, [Alarm? alarmToEdit]) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true, 
+      builder: (context) {
+        return AddAlarmDialog(alarmToEdit: alarmToEdit);
+      },
+    );
+  }
+}
+
+
+--- ARQUIVO: bottomnavbar.dart ---
+// lib/views/widgets/bottom_nav_bar.dart
+import 'package:flutter/material.dart';
+
+class CustomBottomNavBar extends StatelessWidget {
+  final int selectedIndex;
+  final Function(int) onItemSelected;
+
+  const CustomBottomNavBar({
+    super.key,
+    required this.selectedIndex,
+    required this.onItemSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return BottomNavigationBar(
+      items: const <BottomNavigationBarItem>[
+        BottomNavigationBarItem(
+          icon: Icon(Icons.router), // Ãcone para conexÃ£o (ex: roteador, IoT)
+          label: 'Home',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.alarm),
+          label: 'Alarmes',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.history),
+          label: 'HistÃ³rico',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.settings),
+          label: 'ConfiguraÃ§Ãµes',
+        ),
+      ],
+      currentIndex: selectedIndex,
+      selectedItemColor: Theme.of(context).primaryColor, // Usa a cor dinÃ¢mica
+      unselectedItemColor: Colors.grey,
+      onTap: onItemSelected,
+      type: BottomNavigationBarType.fixed, // Garante que todos os itens sÃ£o visÃ­veis
+      backgroundColor: Colors.black, // Cor de fundo para combinar com o tema escuro
+    );
+  }
+}
+
+
+--- ARQUIVO: provisioningscreen.dart ---
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:appetite/controllers/provisioningcontroller.dart';
+
+class ProvisioningScreen extends StatelessWidget {
+  const ProvisioningScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // Usamos um Consumer porque esta tela depende 100% do ProvisioningController
+    return Scaffold(
+      appBar: AppBar(title: const Text('ConfiguraÃ§Ã£o Inicial do Wi-Fi')),
+      body: Consumer<ProvisioningController>(
+        builder: (context, controller, child) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Ãcone de Status DinÃ¢mico
+                    _buildStatusIcon(context, controller.state),
+                    const SizedBox(height: 24),
+                    
+                    // Texto de instruÃ§Ã£o amigÃ¡vel
+                    Text(
+                      controller.message, // Mensagem vinda do Controller
+                      textAlign: TextAlign.center, 
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white, height: 1.5)
+                    ),
+                    const SizedBox(height: 40),
+
+                    // BotÃ£o principal que inicia o processo
+                    if (controller.state == ProvisioningState.initial)
+                      ElevatedButton(
+                        onPressed: controller.startSetup,
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          backgroundColor: Theme.of(context).primaryColor,
+                          foregroundColor: Colors.black
+                        ),
+                        child: const Text('INICIAR CONFIGURAÃ‡ÃƒO', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      ),
+
+                    // FormulÃ¡rio de credenciais
+                    if (controller.state == ProvisioningState.userConnectingToAp ||
+                        controller.state == ProvisioningState.sendingCredentials ||
+                        controller.state == ProvisioningState.failure)
+                      _BuildCredentialForm(controller: controller),
+
+                    // Indicador de carregamento
+                    if (controller.state == ProvisioningState.sendingCredentials ||
+                        controller.state == ProvisioningState.waitingForWifiConnection)
+                      const Padding(
+                        padding: EdgeInsets.all(20.0),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+
+                    // Volta Ã  tela principal apÃ³s sucesso
+                    if (controller.state == ProvisioningState.success)
+                      ElevatedButton(
+                        onPressed: () {
+                          // Fecha esta tela e volta para a HomeTab
+                          Navigator.of(context).pop();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green.shade600,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                        child: const Text('SETUP CONCLUÃDO!', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
+                      ),
+                    
+                    // BotÃ£o de "Tentar Novamente" em caso de falha
+                    if (controller.state == ProvisioningState.failure)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: TextButton(
+                          onPressed: controller.reset,
+                          child: const Text('Tentar Novamente (Reiniciar Setup)'),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // WIDGET: Ãcone de Status AmigÃ¡vel
+  Widget _buildStatusIcon(BuildContext context, ProvisioningState state) {
+    IconData icon;
+    Color color;
+
+    switch (state) {
+      case ProvisioningState.initial:
+        icon = Icons.wifi_find_rounded;
+        color = Colors.grey;
+        break;
+      case ProvisioningState.userConnectingToAp:
+        icon = Icons.tap_and_play_rounded;
+        color = Theme.of(context).primaryColor;
+        break;
+      case ProvisioningState.sendingCredentials:
+      case ProvisioningState.waitingForWifiConnection:
+        icon = Icons.settings_ethernet_rounded;
+        color = Colors.orange;
+        break;
+      case ProvisioningState.failure:
+        icon = Icons.wifi_off_rounded;
+        color = Colors.red;
+        break;
+      case ProvisioningState.success:
+        icon = Icons.check_circle_outline_rounded;
+        color = Colors.green;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color.withOpacity(0.1),
+        border: Border.all(color: color.withOpacity(0.3), width: 2)
+      ),
+      child: Icon(icon, size: 80, color: color),
+    );
+  }
+}
+
+// --- WIDGET: FormulÃ¡rio de Credenciais ---
+
+class _BuildCredentialForm extends StatefulWidget {
+  final ProvisioningController controller;
+  const _BuildCredentialForm({required this.controller});
+
+  @override
+  State<_BuildCredentialForm> createState() => __BuildCredentialFormState();
+}
+
+class __BuildCredentialFormState extends State<_BuildCredentialForm> {
+  final TextEditingController _ssidController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  bool _obscureText = true;
+
+  @override
+  void dispose() {
+    _ssidController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // NÃ£o mostra o formulÃ¡rio se o estado nÃ£o for o correto
+    if (widget.controller.state == ProvisioningState.initial || 
+        widget.controller.state == ProvisioningState.success ||
+        widget.controller.state == ProvisioningState.waitingForWifiConnection) {
+      return const SizedBox.shrink(); 
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 16),
+        // Banner para a rede do ESP32
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade800,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade700)
+          ),
+          child: Text(
+            'Conecte-se Ã  Rede: ${ProvisioningController.ESP32_AP_NAME}',
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+            textAlign: TextAlign.center,
+          ),
+        ),
+        const SizedBox(height: 24),
+        Text(
+          'Agora, insira as credenciais do seu Wi-Fi domÃ©stico:',
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.white70),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 16),
+
+        // Campo de Texto para SSID
+        TextField(
+          controller: _ssidController,
+          decoration: const InputDecoration(
+            labelText: 'Seu SSID (Nome da Rede)',
+            border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.wifi),
+          ),
+          style: const TextStyle(color: Colors.white),
+        ),
+        const SizedBox(height: 12),
+        
+        // Campo de Texto para Senha
+        TextField(
+          controller: _passwordController,
+          decoration: InputDecoration(
+            labelText: 'Senha do Wi-Fi',
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.lock_outline_rounded),
+            suffixIcon: IconButton(
+              icon: Icon(_obscureText ? Icons.visibility_off : Icons.visibility),
+              onPressed: () {
+                setState(() {
+                  _obscureText = !_obscureText;
+                });
+              },
+            ),
+          ),
+          obscureText: _obscureText,
+          style: const TextStyle(color: Colors.white),
+        ),
+        const SizedBox(height: 24),
+
+        // BotÃ£o de Enviar
+        ElevatedButton(
+          onPressed: widget.controller.state == ProvisioningState.sendingCredentials
+              ? null // Desabilita o botÃ£o enquanto envia
+              : () {
+                  // ValidaÃ§Ã£o simples
+                  if (_ssidController.text.isEmpty || _passwordController.text.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Preencha o SSID e a senha.')),
+                    );
+                    return;
+                  }
+                  // Chama o Controller para enviar
+                  widget.controller.sendWifiCredentials(
+                    _ssidController.text,
+                    _passwordController.text,
+                  );
+                },
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            backgroundColor: Theme.of(context).primaryColor,
+            foregroundColor: Colors.black,
+          ),
+          child: Text(
+            widget.controller.state == ProvisioningState.sendingCredentials
+                ? 'ENVIANDO...'
+                : 'ENVIAR CREDENCIAIS',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
+  }
+}

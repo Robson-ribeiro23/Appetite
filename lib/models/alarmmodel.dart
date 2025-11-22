@@ -1,23 +1,12 @@
-// lib/models/alarm_model.dart
+// lib/models/alarmmodel.dart
 import 'package:flutter/material.dart';
 
 class Alarm {
-  // Um ID único para facilitar a edição e exclusão (importante para listas)
   final String id;
-  
-  // O horário que o alarme irá tocar
   TimeOfDay time;
-  
-  // A quantidade em gramas a ser dispensada
   double grams;
-  
-  // Lista de dias da semana (1=Seg, 2=Ter, ..., 7=Dom)
-  List<int> repeatDays;
-  
-  // Indica se o alarme está ativo ou desativado
+  List<int> repeatDays; // 1=Seg, 2=Ter, ..., 7=Dom
   bool isActive;
-  
-  // Indica se o alarme deve se repetir semanalmente (além dos dias escolhidos)
   bool isRepeatingWeekly;
 
   Alarm({
@@ -25,12 +14,13 @@ class Alarm {
     required this.time,
     required this.grams,
     required this.repeatDays,
-    this.isActive = true, // Por padrão, o alarme é criado ativo
+    this.isActive = true,
     this.isRepeatingWeekly = true,
   });
 
   // Método para criar uma cópia do objeto (útil para edição)
   Alarm copyWith({
+    String? id,
     TimeOfDay? time,
     double? grams,
     List<int>? repeatDays,
@@ -38,12 +28,25 @@ class Alarm {
     bool? isRepeatingWeekly,
   }) {
     return Alarm(
-      id: id,
+      id: id ?? this.id,
       time: time ?? this.time,
       grams: grams ?? this.grams,
       repeatDays: repeatDays ?? this.repeatDays,
       isActive: isActive ?? this.isActive,
       isRepeatingWeekly: isRepeatingWeekly ?? this.isRepeatingWeekly,
     );
+  }
+
+  // --- NOVO MÉTODO: Converte para JSON para enviar ao ESP32 ---
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'hour': time.hour,
+      'minute': time.minute,
+      'grams': grams,
+      'repeatDays': repeatDays,
+      'isActive': isActive,
+      'isRepeatingWeekly': isRepeatingWeekly,
+    };
   }
 }

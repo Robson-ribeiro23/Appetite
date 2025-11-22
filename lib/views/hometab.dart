@@ -96,6 +96,55 @@ class _HomeTabState extends State<HomeTab> {
 
                 const SizedBox(height: 32),
 
+// --- NOVA ÁREA: PREENCHIMENTO / MANUTENÇÃO ---
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.15), // Fundo alaranjado para atenção
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange.withOpacity(0.5)),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+                          const SizedBox(width: 10),
+                          Text(
+                            "Manutenção",
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  color: Colors.orange, 
+                                  fontWeight: FontWeight.bold
+                                ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        "Se você acabou de abastecer o reservatório, pressione abaixo para alinhar a ração no tubo.",
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: isConnected 
+                              ? () => controller.fillTube() // Chama a nova função
+                              : null,
+                          icon: const Icon(Icons.plumbing),
+                          label: const Text("PREENCHER SISTEMA (8.5s)"),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.orange,
+                            side: const BorderSide(color: Colors.orange),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 32),
                 // === UI PARA ALIMENTAÇÃO MANUAL ===
                 Text(
                   'Alimentação Manual',
