@@ -68,13 +68,28 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final themeController = Provider.of<ThemeController>(context);
+    
     return MaterialApp(
       title: 'Appetite',
       debugShowCheckedModeBanner: false,
+      
+      // Tema Claro
       theme: buildAppTheme(
         themeController.primaryColor,
         themeController.fontSizeFactor,
+        Brightness.light,
       ),
+      
+      // Tema Escuro
+      darkTheme: buildAppTheme(
+        themeController.primaryColor,
+        themeController.fontSizeFactor,
+        Brightness.dark,
+      ),
+      
+      // O controlador decide qual usar
+      themeMode: themeController.themeMode,
+      
       home: const MainScreen(),
     );
   }

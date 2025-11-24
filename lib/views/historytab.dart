@@ -1,22 +1,25 @@
-// lib/views/history_tab.dart
+// lib/views/historytab.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:appetite/controllers/historycontroller.dart';
 import 'package:appetite/models/historyentrymodel.dart';
-
 
 class HistoryTab extends StatelessWidget {
   const HistoryTab({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Consumer<HistoryController>(
       builder: (context, controller, child) {
         if (controller.history.isEmpty) {
-          return const Center(
+          return Center(
             child: Text(
               'Nenhum histórico de atividade registrado.',
-              style: TextStyle(color: Colors.white70, fontSize: 16),
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: theme.textTheme.bodyMedium?.color?.withOpacity(0.7),
+              ),
               textAlign: TextAlign.center,
             ),
           );
@@ -48,9 +51,7 @@ class _HistoryItemCard extends StatelessWidget {
       case HistoryType.manual:
         return {'icon': Icons.touch_app, 'color': theme.colorScheme.secondary};
       case HistoryType.error:
-        return {'icon': Icons.warning_amber, 'color': Colors.red.shade400};
-      //default:
-        //return {'icon': Icons.info_outline, 'color': Colors.grey};
+        return {'icon': Icons.warning_amber, 'color': theme.colorScheme.error};
     }
   }
 
@@ -63,28 +64,34 @@ class _HistoryItemCard extends StatelessWidget {
     final theme = Theme.of(context);
     final style = _getStyle(entry.type, theme);
 
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: (style['color'] as Color).withAlpha((255 * 0.2).toInt()),
-        child: Icon(style['icon'], color: style['color']),
+    // Envolvi em um Card para melhor visualização nos dois temas
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      color: theme.cardColor, // Cor do cartão adaptável
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: (style['color'] as Color).withOpacity(0.2),
+          child: Icon(style['icon'], color: style['color']),
+        ),
+        title: Text(
+          entry.description,
+          style: theme.textTheme.titleMedium, // Cor do texto adaptável
+        ),
+        subtitle: Text(
+          _formatDateTime(entry.timestamp),
+          style: theme.textTheme.bodySmall, // Cor do subtítulo adaptável
+        ),
+        trailing: entry.gramsDispensed != null
+            ? Text(
+                '${entry.gramsDispensed!.toStringAsFixed(1)}g',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  color: theme.primaryColor,
+                  fontWeight: FontWeight.bold,
+                ),
+              )
+            : null,
       ),
-      title: Text(
-        entry.description,
-        style: theme.textTheme.titleMedium?.copyWith(color: Colors.white),
-      ),
-      subtitle: Text(
-        _formatDateTime(entry.timestamp),
-        style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
-      ),
-      trailing: entry.gramsDispensed != null
-          ? Text(
-              '${entry.gramsDispensed!.toStringAsFixed(1)}g',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: theme.primaryColor,
-                fontWeight: FontWeight.bold,
-              ),
-            )
-          : null,
     );
   }
 }

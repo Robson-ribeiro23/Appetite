@@ -1,25 +1,31 @@
-// lib/controllers/theme_controller.dart
 import 'package:flutter/material.dart';
 
 class ThemeController extends ChangeNotifier {
-  // Cor primária inicial
   Color _primaryColor = Colors.blue;
+  double _fontSizeFactor = 1.0;
   
-  // Tamanho do texto inicial
-  double _fontSizeFactor = 1.0; 
+  // Novo controle de Tema
+  ThemeMode _themeMode = ThemeMode.dark; // Começa escuro por padrão
 
   Color get primaryColor => _primaryColor;
   double get fontSizeFactor => _fontSizeFactor;
+  ThemeMode get themeMode => _themeMode;
 
-  // Método para mudar a cor (será chamado pelo painel RGB)
+  bool get isDarkMode => _themeMode == ThemeMode.dark;
+
   void setPrimaryColor(Color newColor) {
     _primaryColor = newColor;
     notifyListeners();
   }
   
-  // Método para mudar o tamanho dos componentes/texto
   void setFontSizeFactor(double newFactor) {
     _fontSizeFactor = newFactor;
+    notifyListeners();
+  }
+
+  // Alternar entre Claro e Escuro
+  void toggleTheme(bool isDark) {
+    _themeMode = isDark ? ThemeMode.dark : ThemeMode.light;
     notifyListeners();
   }
 }

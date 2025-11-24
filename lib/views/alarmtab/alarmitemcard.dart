@@ -1,7 +1,6 @@
-// lib/views/alarms_tab/alarm_item_card.dart
+// lib/views/alarmtab/alarmitemcard.dart
 import 'package:flutter/material.dart';
 import 'package:appetite/models/alarmmodel.dart';
-import 'package:appetite/core/constants/appcolors.dart';
 
 class AlarmItemCard extends StatelessWidget {
   final Alarm alarm;
@@ -19,9 +18,7 @@ class AlarmItemCard extends StatelessWidget {
 
   String _formatDays(List<int> days) {
     if (days.isEmpty) return 'Não repete';
-    
     final dayMap = {1: 'SEG', 2: 'TER', 3: 'QUA', 4: 'QUI', 5: 'SEX', 6: 'SAB', 7: 'DOM'};
-    
     return days.map((day) => dayMap[day]).whereType<String>().join(', ');
   }
 
@@ -30,9 +27,13 @@ class AlarmItemCard extends StatelessWidget {
     final theme = Theme.of(context);
     
     return Card(
-      color: alarm.isActive ? AppColors.darkBackground : Colors.grey.shade800,
+      // Se ativo: cor do card padrão do tema. Se inativo: cor desabilitada suave.
+      color: alarm.isActive 
+          ? theme.cardColor 
+          : theme.disabledColor.withOpacity(0.1),
+      
       margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-      elevation: 4,
+      elevation: alarm.isActive ? 4 : 1, // Menos sombra se inativo
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Row(
@@ -42,7 +43,8 @@ class AlarmItemCard extends StatelessWidget {
             Text(
               alarm.time.format(context),
               style: theme.textTheme.headlineLarge?.copyWith(
-                color: alarm.isActive ? theme.primaryColor : Colors.white54,
+                // Cor primária se ativo, cor de desabilitado se inativo
+                color: alarm.isActive ? theme.primaryColor : theme.disabledColor,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -57,7 +59,8 @@ class AlarmItemCard extends StatelessWidget {
                   Text(
                     '${alarm.grams.toStringAsFixed(1)} gramas',
                     style: theme.textTheme.bodyLarge?.copyWith(
-                      color: alarm.isActive ? Colors.white : Colors.white54,
+                      // Texto com cor padrão do tema ou mais apagado se inativo
+                      color: alarm.isActive ? null : theme.disabledColor,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -65,8 +68,8 @@ class AlarmItemCard extends StatelessWidget {
                   Text(
                     _formatDays(alarm.repeatDays),
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: alarm.isActive ? Colors.white70 : Colors.white38,
                       fontStyle: FontStyle.italic,
+                      color: alarm.isActive ? null : theme.disabledColor,
                     ),
                   ),
                 ],
@@ -99,7 +102,8 @@ class AlarmItemCard extends StatelessWidget {
                   child: Text('Excluir'),
                 ),
               ],
-              icon: const Icon(Icons.more_vert, color: Colors.white70),
+              // Ícone se adapta à cor de ícone padrão do tema
+              icon: Icon(Icons.more_vert, color: theme.iconTheme.color),
             ),
           ],
         ),

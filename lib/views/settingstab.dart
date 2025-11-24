@@ -26,6 +26,18 @@ class SettingsTab extends StatelessWidget {
         ),
         const Divider(color: Colors.white12),
 
+SwitchListTile(
+          title: Text('Modo Escuro', style: theme.textTheme.titleMedium),
+          value: themeController.isDarkMode,
+          onChanged: (val) => themeController.toggleTheme(val),
+          activeColor: themeController.primaryColor,
+          secondary: Icon(
+            themeController.isDarkMode ? Icons.dark_mode : Icons.light_mode,
+            color: themeController.primaryColor,
+          ),
+        ),
+        const Divider(),
+
         // --- 1. PAINEL DE CORES RGB (MUDANÇA DE TEMA) ---
         _buildColorThemeSection(context, themeController),
         const SizedBox(height: 30),
