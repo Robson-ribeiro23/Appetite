@@ -1,27 +1,26 @@
-// lib/controllers/homecontroller.dart
-
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:appetite/services/esp32service.dart';
-import 'package:appetite/controllers/historycontroller.dart'; // Importe o HistoryController
-import 'package:appetite/models/historyentrymodel.dart';   // Importe o Modelo
+import 'package:appetite/controllers/historycontroller.dart';
+import 'package:appetite/models/historyentrymodel.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected, error }
 
 class HomeController extends ChangeNotifier {
   final ESP32Service _service = ESP32Service();
-  
-  // --- NOVA DEPENDÊNCIA ---
-  final HistoryController historyController; 
+  final HistoryController historyController;
 
   ConnectionStatus _status = ConnectionStatus.disconnected;
-  String _message = "Toque para conectar ao Broker MQTT";
-  Completer<bool>? _connectionCompleter;
-  String _alarmPayload = '[]';
-
+  String _message = "Toque para conectar ao ESP32 (HTTP)";
+  
   ConnectionStatus get status => _status;
   String get message => _message;
 
+  // Construtor
+  HomeController({required this.historyController});
+
+  // Getter para UI
   String get connectionStatus {
     switch (_status) {
       case ConnectionStatus.connected: return "Conectado";
@@ -31,146 +30,98 @@ class HomeController extends ChangeNotifier {
     }
   }
 
-  // --- CONSTRUTOR ATUALIZADO ---
-  // Agora exigimos o historyController ao criar este controller
-  HomeController({required this.historyController}) {
-    _listenToBrokerMessages();
-  }
-
-  void _listenToBrokerMessages() {
-    _service.messageStream.listen((payload) {
-      if (payload == 'online') {
-        if (_status != ConnectionStatus.connected) {
-          _status = ConnectionStatus.connected;
-          _message = "Conexão bem-sucedida! Dispositivo ONLINE.";
-          notifyListeners();
-        }
-        if (_connectionCompleter?.isCompleted == false) {
-          _connectionCompleter!.complete(true);
-        }
-        return;
-      }
-
-      if (payload.contains('success')) {
-        _message = "Dispensa concluída com sucesso!";
-        notifyListeners();
-      }
-    });
-  }
-
+  // --- CONEXÃO (PING) ---
   Future<void> attemptConnection() async {
-    if (_status == ConnectionStatus.connecting || _status == ConnectionStatus.connected) {
-      return;
-    }
+    if (_status == ConnectionStatus.connecting) return;
 
     _status = ConnectionStatus.connecting;
-    _message = "Conectando ao Broker MQTT...";
+    _message = "Buscando ESP32 na rede...";
     notifyListeners();
 
-    bool brokerSuccess = await _service.connectToBroker();
+    // Tenta "pingar" o ESP32 via HTTP
+    bool success = await _service.connectToBroker();
 
-    if (!brokerSuccess) {
-      _status = ConnectionStatus.error;
-      _message = "Falha ao conectar ao Broker MQTT. Verifique sua rede.";
+    if (success) {
+      _status = ConnectionStatus.connected;
+      // CORREÇÃO AQUI: Usar ESP32Service.baseUrl em vez de _service.baseUrl
+      _message = "Conectado ao IP ${ESP32Service.baseUrl}"; 
       
-      // --- REGISTRO DE ERRO NO HISTÓRICO ---
+    } else {
+      _status = ConnectionStatus.error;
+      _message = "Não encontrado no IP configurado.\nVerifique se o PC e ESP32 estão no mesmo Wi-Fi.";
+      
+      // CORREÇÃO AQUI TAMBÉM
       historyController.addEntry(
-        type: HistoryType.error, 
-        description: "Falha de conexão com Broker MQTT."
+        type: HistoryType.error,
+        description: "Falha ao conectar no IP ${ESP32Service.baseUrl}"
       );
-      
+    }
+    notifyListeners();
+  }
+
+  // --- ALIMENTAÇÃO MANUAL ---
+  Future<void> manualFeed(double grams, {bool isMaintenance = false}) async {
+    if (_status != ConnectionStatus.connected) {
+      _message = "Erro: Não conectado ao ESP32.";
       notifyListeners();
       return;
     }
 
-    _message = "Conexão com Broker OK. Aguardando ESP32 (10s)...";
+    _message = "Enviando comando...";
     notifyListeners();
 
-    _connectionCompleter = Completer<bool>();
-
-    try {
-      bool esp32Confirmed = await _connectionCompleter!.future.timeout(
-        const Duration(seconds: 15), // Aumentei um pouco o timeout por segurança
-        onTimeout: () => false,
-      );
-
-      if (!esp32Confirmed) {
-        _status = ConnectionStatus.error;
-        _message = "Conexão com ESP32 falhou (Timeout). Dispositivo offline.";
-        
-        // --- REGISTRO DE ERRO NO HISTÓRICO ---
-        historyController.addEntry(
-          type: HistoryType.error, 
-          description: "Timeout: ESP32 não respondeu."
-        );
-        
-        notifyListeners();
-      }
-    } on TimeoutException {
-      _status = ConnectionStatus.error;
-      _message = "Conexão com ESP32 falhou (Timeout). Dispositivo offline.";
-      notifyListeners();
-    } finally {
-      _connectionCompleter = null;
-    }
-  }
-
-  // Função para preencher o tubo (8.5 segundos)
-  void fillTube() {
-    if (_status != ConnectionStatus.connected) {
-      _message = "Erro: Conecte-se antes de realizar manutenção.";
-      notifyListeners();
-      return;
-    }
-
-    const double gramsForFill = 34.0;
-    manualFeed(gramsForFill, isMaintenance: true); // Flag para diferenciar no histórico
-  }
-
-  void manualFeed(double grams, {bool isMaintenance = false}) {
-    if (_status != ConnectionStatus.connected) {
-      _message = "Erro: Dispositivo não conectado ou offline.";
-      notifyListeners();
-      return;
-    }
-
-    final payload = '{"command": "feed_manual", "grams": ${grams.toStringAsFixed(1)}}';
-    _service.publishCommand('appetite/comando/manual', payload);
-
-    _message = isMaintenance 
-        ? "Preenchendo sistema..." 
-        : "Comando de ${grams.toStringAsFixed(1)}g enviado. Aguardando confirmação...";
+    // O ESP32 HTTP espera um JSON simples: {"grams": 50.0}
+    final payload = '{"grams": ${grams.toStringAsFixed(1)}}';
     
-    // --- REGISTRO DE AÇÃO NO HISTÓRICO ---
-    historyController.addEntry(
-      type: HistoryType.manual,
-      description: isMaintenance 
-          ? "Manutenção: Preenchimento do tubo." 
-          : "Alimentação manual de ${grams.toStringAsFixed(1)}g.",
-      gramsDispensed: grams,
-    );
+    // Envia e espera a resposta (await)
+    bool success = await _service.publishCommand('manual', payload);
 
+    if (success) {
+      _message = isMaintenance 
+          ? "Manutenção iniciada com sucesso!" 
+          : "Comando recebido pelo ESP32!";
+      
+      historyController.addEntry(
+        type: HistoryType.manual,
+        description: isMaintenance 
+            ? "Manutenção: Preenchimento." 
+            : "Alimentação manual de ${grams.toStringAsFixed(1)}g.",
+        gramsDispensed: grams,
+      );
+    } else {
+      _message = "Falha ao enviar comando. Verifique a conexão.";
+      historyController.addEntry(
+        type: HistoryType.error,
+        description: "Falha no envio de comando manual."
+      );
+    }
     notifyListeners();
   }
 
-  void sendAlarmConfiguration(String alarmsJson) {
-    if (_status != ConnectionStatus.connected) {
-      _message = "Erro: Aplicativo não conectado ao Broker. Configuração salva localmente.";
-      notifyListeners();
-      return;
+  // --- MANUTENÇÃO (PREENCHER) ---
+  void fillTube() {
+    // 34g * 250ms = 8500ms (8.5 segundos)
+    manualFeed(34.0, isMaintenance: true);
+  }
+
+  // --- ENVIAR ALARMES ---
+  Future<void> sendAlarmConfiguration(String alarmsJson) async {
+    if (_status != ConnectionStatus.connected) return;
+
+    // Envia para a rota /alarms
+    bool success = await _service.publishCommand('alarme', alarmsJson);
+
+    if (success) {
+      _message = "Alarmes sincronizados com o ESP32.";
+    } else {
+      _message = "Erro ao sincronizar alarmes.";
     }
-
-    _alarmPayload = alarmsJson;
-    _service.publishCommand('appetite/comando/alarme', _alarmPayload);
-
-    _message = "Configuração de alarmes enviada com sucesso.";
     notifyListeners();
   }
 
   void disconnect() {
-    _service.disconnect();
     _status = ConnectionStatus.disconnected;
-    _message = "Desconectado do Broker.";
+    _message = "Desconectado.";
     notifyListeners();
   }
 }

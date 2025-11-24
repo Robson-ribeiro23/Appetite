@@ -1,109 +1,82 @@
-// lib/services/esp32service.dart (CÓDIGO FINAL E CORRETO PARA MQTT)
 import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
-import 'package:mqtt_client/mqtt_client.dart';
-import 'package:mqtt_client/mqtt_server_client.dart';
 
 class ESP32Service {
-  // Configurações do Broker MQTT (Usamos um exemplo público para testes)
-  static const String brokerHost = 'test.mosquitto.org';
-  static const int brokerPort = 1883;
-  static const String clientId = 'flutter_appetite_client';
+  // --- CONFIGURAÇÃO CRÍTICA PARA A APRESENTAÇÃO ---
+  // 1. Ligue o Hotspot do Celular.
+  // 2. Ligue o ESP32 e olhe no Monitor Serial qual IP ele pegou.
+  // 3. Escreva o IP aqui embaixo antes de rodar o app.
+  static const String espIp = "10.225.63.102"; // <--- ALTERE AQUI NO DIA!
+  
+  static const String baseUrl = "http://$espIp";
 
-  MqttServerClient? client;
+  // O HTTP não tem stream de mensagens constante, então criamos um stream vazio
+  // apenas para não quebrar o código antigo que depende dele.
+  Stream<String> get messageStream => const Stream.empty();
 
-  // Stream para enviar mensagens recebidas do ESP32 para o Controller
-  final StreamController<String> _messageController =
-      StreamController<String>.broadcast();
-  Stream<String> get messageStream =>
-      _messageController.stream; // <-- DEFINIÇÃO CORRETA
-
-  // --- 1. CONEXÃO COM O BROKER ---
+  // --- 1. TESTAR CONEXÃO (PING) ---
   Future<bool> connectToBroker() async {
-    // <-- DEFINIÇÃO CORRETA
-    // Usando os nomes de constantes
-    client = MqttServerClient(brokerHost, clientId);
-    client!.port = brokerPort;
-
-    client!.logging(on: false);
-    client!.keepAlivePeriod = 20;
-    client!.onConnected = onConnected;
-    client!.onDisconnected = onDisconnected;
-
+    // Nota: Mantive o nome 'connectToBroker' para não ter que mudar o HomeController todo,
+    // mas na verdade ele está testando a conexão direta HTTP.
     try {
-      final MqttConnectMessage connMess = MqttConnectMessage()
-          .withClientIdentifier(clientId)
-          .startClean()
-          .withWillQos(MqttQos.atLeastOnce);
+      if (kDebugMode) print('Tentando contactar o ESP32 em $baseUrl/status ...');
+      
+      final response = await http.get(
+        Uri.parse('$baseUrl/status')
+      ).timeout(const Duration(seconds: 3)); // Timeout curto para ser ágil
 
-      client!.connectionMessage = connMess;
-
-      await client!.connect();
-    } on Exception catch (e) {
-      if (kDebugMode) {
-        print('Erro de Conexão MQTT: $e');
+      if (response.statusCode == 200) {
+        if (kDebugMode) print('ESP32 respondeu! Estamos conectados.');
+        return true;
+      } else {
+        if (kDebugMode) print('ESP32 respondeu com erro: ${response.statusCode}');
+        return false;
       }
-      client!.disconnect();
+    } catch (e) {
+      if (kDebugMode) print('Falha ao conectar no IP $espIp: $e');
       return false;
     }
+  }
 
-    if (client!.connectionStatus!.state == MqttConnectionState.connected) {
-      // 2. Assinar tópicos (para receber status do ESP32)
-      client!.subscribe('appetite/status/#', MqttQos.atLeastOnce);
-
-      // 3. Configurar callback para receber mensagens
-      client!.updates!.listen((List<MqttReceivedMessage<MqttMessage>> c) {
-        final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
-        final String payload = MqttPublishPayload.bytesToStringAsString(
-          recMess.payload.message,
-        );
-
-        _messageController.add(payload);
-
-        if (kDebugMode) {
-          print('MQTT Mensagem recebida no tópico ${c[0].topic}: $payload');
-        }
-      });
-
-      return true;
+  // --- 2. ENVIAR COMANDOS ---
+  // Esta função decide se manda para /manual ou /alarms baseado no tópico antigo
+  Future<bool> publishCommand(String topic, String jsonPayload) async {
+    String endpoint = "";
+    
+    // Mapeia os tópicos antigos do MQTT para rotas HTTP
+    if (topic.contains("manual")) {
+      endpoint = "/manual";
+    } else if (topic.contains("alarme")) {
+      endpoint = "/alarms";
     } else {
       return false;
     }
-  }
 
-  void onConnected() {
-    if (kDebugMode) {
-      print('MQTT: Conectado ao Broker!');
-    }
-  }
+    try {
+      if (kDebugMode) print('Enviando POST para $baseUrl$endpoint com: $jsonPayload');
+      
+      final response = await http.post(
+        Uri.parse('$baseUrl$endpoint'),
+        headers: {"Content-Type": "application/json"},
+        body: jsonPayload,
+      ).timeout(const Duration(seconds: 5));
 
-  void onDisconnected() {
-    if (kDebugMode) {
-      print('MQTT: Desconectado do Broker.');
-    }
-  }
-
-  // --- 4. PUBLICAR COMANDOS ---
-  void publishCommand(String topic, String payload) {
-    // <-- DEFINIÇÃO CORRETA
-    if (client?.connectionStatus?.state != MqttConnectionState.connected) {
-      if (kDebugMode) {
-        print('MQTT: Não conectado ao Broker. Comando não enviado.');
+      if (response.statusCode == 200) {
+        if (kDebugMode) print('Comando enviado com sucesso!');
+        return true;
+      } else {
+        if (kDebugMode) print('Erro no ESP32: ${response.statusCode} - ${response.body}');
+        return false;
       }
-      return;
-    }
-
-    final builder = MqttClientPayloadBuilder();
-    builder.addString(payload);
-
-    client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
-
-    if (kDebugMode) {
-      print('MQTT: Comando publicado para o tópico $topic');
+    } catch (e) {
+      if (kDebugMode) print('Erro de envio HTTP: $e');
+      return false;
     }
   }
 
   void disconnect() {
-    client?.disconnect();
+    // HTTP não precisa desconectar
   }
 }
