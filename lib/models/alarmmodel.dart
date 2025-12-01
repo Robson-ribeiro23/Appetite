@@ -1,11 +1,10 @@
-// lib/models/alarmmodel.dart
 import 'package:flutter/material.dart';
 
 class Alarm {
   final String id;
   TimeOfDay time;
   double grams;
-  List<int> repeatDays; // 1=Seg, 2=Ter, ..., 7=Dom
+  List<int> repeatDays;
   bool isActive;
   bool isRepeatingWeekly;
 
@@ -18,6 +17,30 @@ class Alarm {
     this.isRepeatingWeekly = true,
   });
 
+  // Converte para JSON (Salvar)
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'hour': time.hour,
+      'minute': time.minute,
+      'grams': grams,
+      'repeatDays': repeatDays,
+      'isActive': isActive,
+      'isRepeatingWeekly': isRepeatingWeekly,
+    };
+  }
+
+  // Converte de JSON (Ler) -> NOVO MÉTODO
+  factory Alarm.fromJson(Map<String, dynamic> json) {
+    return Alarm(
+      id: json['id'],
+      time: TimeOfDay(hour: json['hour'], minute: json['minute']),
+      grams: (json['grams'] as num).toDouble(),
+      repeatDays: List<int>.from(json['repeatDays']),
+      isActive: json['isActive'],
+      isRepeatingWeekly: json['isRepeatingWeekly'],
+    );
+  }
   // Método para criar uma cópia do objeto (útil para edição)
   Alarm copyWith({
     String? id,
@@ -37,16 +60,5 @@ class Alarm {
     );
   }
 
-  // --- NOVO MÉTODO: Converte para JSON para enviar ao ESP32 ---
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'hour': time.hour,
-      'minute': time.minute,
-      'grams': grams,
-      'repeatDays': repeatDays,
-      'isActive': isActive,
-      'isRepeatingWeekly': isRepeatingWeekly,
-    };
-  }
+  
 }

@@ -10,10 +10,10 @@ enum HistoryType {
 
 class HistoryEntry {
   final String id;
-  final DateTime timestamp; // Quando o evento ocorreu
-  final HistoryType type;   // O tipo de evento
-  final String description; // Detalhe do evento (ex: "Alarme das 7:00 concluído")
-  final double? gramsDispensed; // Quantidade dispensada (opcional)
+  final DateTime timestamp;
+  final HistoryType type;
+  final String description;
+  final double? gramsDispensed;
 
   HistoryEntry({
     required this.id,
@@ -22,4 +22,26 @@ class HistoryEntry {
     required this.description,
     this.gramsDispensed,
   });
+
+  // Salvar
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'timestamp': timestamp.toIso8601String(), // Salva data como texto
+      'type': type.index, // Salva o índice do Enum (0, 1, 2)
+      'description': description,
+      'gramsDispensed': gramsDispensed,
+    };
+  }
+
+  // Ler
+  factory HistoryEntry.fromJson(Map<String, dynamic> json) {
+    return HistoryEntry(
+      id: json['id'],
+      timestamp: DateTime.parse(json['timestamp']),
+      type: HistoryType.values[json['type']], // Recupera o Enum pelo índice
+      description: json['description'],
+      gramsDispensed: json['gramsDispensed'] != null ? (json['gramsDispensed'] as num).toDouble() : null,
+    );
+  }
 }

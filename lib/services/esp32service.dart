@@ -1,25 +1,23 @@
 import 'dart:async';
-import 'dart:convert';
+//import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 
 class ESP32Service {
-  // --- CONFIGURAÇÃO CRÍTICA PARA A APRESENTAÇÃO ---
+  // --- CONFIGURAÇÃO CRÍTICA  ---
   // 1. Ligue o Hotspot do Celular.
   // 2. Ligue o ESP32 e olhe no Monitor Serial qual IP ele pegou.
   // 3. Escreva o IP aqui embaixo antes de rodar o app.
-  static const String espIp = "10.225.63.102"; // <--- ALTERE AQUI NO DIA!
+  static const String espIp = "10.229.21.102"; 
   
   static const String baseUrl = "http://$espIp";
 
-  // O HTTP não tem stream de mensagens constante, então criamos um stream vazio
-  // apenas para não quebrar o código antigo que depende dele.
+
   Stream<String> get messageStream => const Stream.empty();
 
   // --- 1. TESTAR CONEXÃO (PING) ---
   Future<bool> connectToBroker() async {
-    // Nota: Mantive o nome 'connectToBroker' para não ter que mudar o HomeController todo,
-    // mas na verdade ele está testando a conexão direta HTTP.
+
     try {
       if (kDebugMode) print('Tentando contactar o ESP32 em $baseUrl/status ...');
       
@@ -41,7 +39,7 @@ class ESP32Service {
   }
 
   // --- 2. ENVIAR COMANDOS ---
-  // Esta função decide se manda para /manual ou /alarms baseado no tópico antigo
+
   Future<bool> publishCommand(String topic, String jsonPayload) async {
     String endpoint = "";
     

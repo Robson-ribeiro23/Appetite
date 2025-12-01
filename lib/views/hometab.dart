@@ -15,10 +15,12 @@ class HomeTab extends StatefulWidget {
 
 class _HomeTabState extends State<HomeTab> {
   final TextEditingController _gramsController = TextEditingController();
+  bool _isLoading = false; // Controle do estado de carregamento
 
   @override
   void initState() {
     super.initState();
+    // Tenta conectar assim que a tela é carregada
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Provider.of<HomeController>(context, listen: false).attemptConnection();
     });
@@ -30,26 +32,66 @@ class _HomeTabState extends State<HomeTab> {
     super.dispose();
   }
 
-  void _performManualFeed(HomeController controller) {
+  // Feedback Visual de Sucesso (Dialog bonito)
+  void _showSuccessDialog(String message) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.check_circle_rounded, color: Colors.green, size: 60),
+            const SizedBox(height: 16),
+            Text(
+              "Sucesso!",
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(message, textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
+    // Fecha sozinho após 1.5s
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted) Navigator.of(context).pop();
+    });
+  }
+
+  // Lógica para alimentar
+  void _performManualFeed(HomeController controller) async {
     final gramsText = _gramsController.text;
     final grams = double.tryParse(gramsText);
 
     if (grams == null || grams <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Por favor, insira uma quantidade válida de ração.')),
+        const SnackBar(content: Text('Por favor, insira uma quantidade válida.')),
       );
       return;
     }
 
     if (controller.status == ConnectionStatus.connected) {
-      controller.manualFeed(grams);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Comando de alimentação de $grams gramas enviado com sucesso!')),
-      );
-      _gramsController.clear();
+      setState(() => _isLoading = true); // Trava a UI e mostra loading
+
+      // Chama a função que agora retorna Future<bool>
+      bool success = await controller.manualFeed(grams);
+
+      if (mounted) setState(() => _isLoading = false); // Destrava a UI
+
+      if (success) {
+        _showSuccessDialog('Comando de $grams g enviado!');
+        _gramsController.clear();
+        FocusScope.of(context).unfocus(); // Esconde o teclado
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erro ao enviar. Tente novamente.')),
+        );
+      }
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Erro: Dispositivo offline. Tente reconectar.')),
+        const SnackBar(content: Text('Dispositivo offline.')),
       );
     }
   }
@@ -57,7 +99,7 @@ class _HomeTabState extends State<HomeTab> {
   @override
   Widget build(BuildContext context) {
     final themeController = Provider.of<ThemeController>(context);
-    final theme = Theme.of(context); // Acesso fácil ao tema atual
+    final theme = Theme.of(context);
 
     return Consumer<HomeController>(
       builder: (context, controller, child) {
@@ -71,50 +113,54 @@ class _HomeTabState extends State<HomeTab> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // === STATUS DINÂMICO ===
+                // === STATUS DE CONEXÃO ===
                 _buildDynamicStatusUI(context, statusEnum, statusMessage, themeController.primaryColor),
 
                 const SizedBox(height: 32),
 
-                // === ÁREA DE MANUTENÇÃO (PREENCHER SISTEMA) ===
+                // === ÁREA DE MANUTENÇÃO ===
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1), // Fundo suave adaptável
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.orange.withOpacity(0.5)),
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
                   ),
                   child: Column(
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+                          const Icon(Icons.build_circle_outlined, color: Colors.orange),
                           const SizedBox(width: 10),
                           Text(
                             "Manutenção",
                             style: theme.textTheme.titleMedium?.copyWith(
-                              color: Colors.orange,
-                              fontWeight: FontWeight.bold,
+                              color: Colors.orange, 
+                              fontWeight: FontWeight.bold
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Se você acabou de abastecer o reservatório, pressione abaixo para alinhar a ração no tubo.",
-                        style: theme.textTheme.bodySmall, // Cor adaptável do tema
+                        "Use para preencher o tubo após abastecer o reservatório.",
+                        style: theme.textTheme.bodySmall,
                       ),
                       const SizedBox(height: 12),
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton.icon(
-                          onPressed: isConnected ? () => controller.fillTube() : null,
+                          // Só permite clicar se conectado e não estiver carregando outra coisa
+                          onPressed: isConnected && !_isLoading 
+                              ? () => controller.fillTube() 
+                              : null,
                           icon: const Icon(Icons.plumbing),
-                          label: const Text("PREENCHER SISTEMA (8.5s)"),
+                          label: const Text("PREENCHER SISTEMA"),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: Colors.orange,
                             side: const BorderSide(color: Colors.orange),
                             padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           ),
                         ),
                       ),
@@ -128,8 +174,8 @@ class _HomeTabState extends State<HomeTab> {
                 Text(
                   'Alimentação Manual',
                   style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: themeController.primaryColor,
+                    fontWeight: FontWeight.bold, 
+                    color: themeController.primaryColor
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -138,12 +184,12 @@ class _HomeTabState extends State<HomeTab> {
                   controller: _gramsController,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
-                    labelText: 'Quantidade de Ração (gramas)',
-                    hintText: 'Ex: 5.0',
+                    labelText: 'Quantidade (gramas)',
+                    hintText: 'Ex: 50',
+                    suffixText: 'g',
                     border: OutlineInputBorder(),
                   ),
-                  enabled: isConnected,
-                  // style: null (removemos o style fixo para usar o do tema)
+                  enabled: isConnected && !_isLoading,
                 ),
                 
                 const SizedBox(height: 16),
@@ -151,14 +197,23 @@ class _HomeTabState extends State<HomeTab> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: isConnected ? () => _performManualFeed(controller) : null,
-                    icon: const Icon(Icons.send),
-                    label: const Text('Alimentar Agora'),
+                    onPressed: isConnected && !_isLoading 
+                        ? () => _performManualFeed(controller) 
+                        : null,
+                    
+                    // Troca o ícone por Loading girando se estiver carregando
+                    icon: _isLoading 
+                        ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Icon(Icons.send_rounded),
+                    
+                    label: Text(_isLoading ? 'ENVIANDO...' : 'ALIMENTAR AGORA'),
+                    
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       backgroundColor: themeController.primaryColor,
-                      foregroundColor: Colors.white, // Texto branco no botão fica bom sempre
-                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ),
@@ -170,84 +225,67 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
+  // Widget de Status (Cards coloridos)
   Widget _buildDynamicStatusUI(BuildContext context, ConnectionStatus status, String message, Color themeColor) {
     final theme = Theme.of(context);
     IconData icon;
     Color statusColor;
     String friendlyMessage;
-    bool showConfigButton = false;
 
     switch (status) {
       case ConnectionStatus.connected:
-        icon = Icons.cloud_done_rounded;
+        icon = Icons.wifi_tethering;
         statusColor = Colors.green;
-        friendlyMessage = "Dispositivo Online";
+        friendlyMessage = "Conectado";
         break;
       case ConnectionStatus.connecting:
-        icon = Icons.cloud_sync_rounded;
+        icon = Icons.sync;
         statusColor = Colors.orange;
-        friendlyMessage = "Conectando...";
+        friendlyMessage = "Buscando...";
         break;
       case ConnectionStatus.error:
-        icon = Icons.cloud_off_rounded;
+        icon = Icons.wifi_off;
         statusColor = Colors.red;
-        friendlyMessage = "Dispositivo Offline";
-        showConfigButton = true;
+        friendlyMessage = "Offline";
         break;
-      case ConnectionStatus.disconnected:
       default:
-        icon = Icons.cloud_off_rounded;
+        icon = Icons.power_off;
         statusColor = Colors.grey;
-        friendlyMessage = "Dispositivo Desconectado";
-        showConfigButton = true;
+        friendlyMessage = "Desconectado";
     }
 
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
       decoration: BoxDecoration(
-        color: statusColor.withOpacity(0.1), // Fundo suave da cor do status
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: statusColor.withOpacity(0.3)),
+        color: statusColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: statusColor.withOpacity(0.2)),
       ),
-      child: Column(
+      child: Row(
         children: [
-          Icon(icon, size: 60, color: statusColor),
-          const SizedBox(height: 16),
-          Text(
-            friendlyMessage,
-            style: theme.textTheme.titleLarge?.copyWith(
-              color: statusColor, 
-              fontWeight: FontWeight.bold
-            ),
-            textAlign: TextAlign.center,
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: statusColor.withOpacity(0.2), shape: BoxShape.circle),
+            child: Icon(icon, color: statusColor, size: 32),
           ),
-          const SizedBox(height: 8),
-          Text(
-            message,
-            style: theme.textTheme.bodyMedium, // Usa a cor do texto do tema (preto/branco)
-            textAlign: TextAlign.center,
-          ),
-          
-          if (showConfigButton)
-            Padding(
-              padding: const EdgeInsets.only(top: 20.0),
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  // Na demo, isso pode ser ignorado ou levar ao provisionamento
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (context) => const ProvisioningScreen()),
-                  );
-                },
-                icon: const Icon(Icons.settings),
-                label: const Text('Configurar Wi-Fi'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: themeColor,
-                  foregroundColor: Colors.white,
-                  textStyle: const TextStyle(fontWeight: FontWeight.bold),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  friendlyMessage, 
+                  style: theme.textTheme.titleLarge?.copyWith(color: statusColor, fontWeight: FontWeight.bold)
                 ),
-              ),
+                Text(
+                  message, 
+                  style: theme.textTheme.bodySmall, 
+                  maxLines: 2, 
+                  overflow: TextOverflow.ellipsis
+                ),
+              ],
             ),
+          ),
         ],
       ),
     );

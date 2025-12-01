@@ -11,43 +11,60 @@ class AlarmListView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Consumer<AlarmController>(
       builder: (context, controller, child) {
-        if (controller.alarms.isEmpty) {
-          return const Center(
-            child: Text(
-              'Nenhum alarme configurado. Toque no "+" para adicionar.',
-              style: TextStyle(color: Colors.white70, fontSize: 16),
-              textAlign: TextAlign.center,
-            ),
-          );
-        }
-
         return Stack(
           children: [
-            // A Lista Scrollável de Alarmes
-            ListView.builder(
-              itemCount: controller.alarms.length,
-              itemBuilder: (context, index) {
-                final alarm = controller.alarms[index];
-                return AlarmItemCard(
-                  alarm: alarm,
-                  onToggle: () => controller.toggleAlarmActive(alarm.id),
-                  onDelete: () => controller.deleteAlarm(alarm.id),
-                  onEdit: () => _showAddEditAlarm(context, controller, alarm),
-                );
-              },
-            ),
+            if (controller.alarms.isEmpty)
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Ícone Grande e Bonito
+                    Icon(Icons.alarm_off_rounded, size: 80, color: theme.disabledColor.withOpacity(0.2)),
+                    const SizedBox(height: 20),
+                    Text(
+                      'Nenhum alarme configurado',
+                      style: theme.textTheme.titleLarge?.copyWith(color: theme.disabledColor),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Toque no botão "+" para\nagendar uma refeição.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium?.copyWith(color: theme.disabledColor),
+                    ),
+                    const SizedBox(height: 80), // Espaço para não ficar colado no botão
+                  ],
+                ),
+              )
+            else
+              ListView.builder(
+                // Adiciona um padding no final para o último item não ficar atrás do botão
+                padding: const EdgeInsets.only(top: 8.0, bottom: 80.0),
+                itemCount: controller.alarms.length,
+                itemBuilder: (context, index) {
+                  final alarm = controller.alarms[index];
+                  return AlarmItemCard(
+                    alarm: alarm,
+                    onToggle: () => controller.toggleAlarmActive(alarm.id),
+                    onDelete: () => controller.deleteAlarm(alarm.id),
+                    onEdit: () => _showAddEditAlarm(context, controller, alarm),
+                  );
+                },
+              ),
 
-            // O Botão Flutuante Centralizado na parte Inferior
+            // CAMADA 2: O BOTÃO FLUTUANTE (Sempre visível)
             Align(
               alignment: Alignment.bottomCenter,
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 24.0), 
                 child: FloatingActionButton(
                   onPressed: () => _showAddEditAlarm(context, controller), 
-                  backgroundColor: Theme.of(context).primaryColor,
+                  backgroundColor: theme.primaryColor,
                   shape: const CircleBorder(),
+                  // Ícone preto ou branco dependendo do contraste, mas preto costuma ser seguro na cor primária
                   child: const Icon(Icons.add, size: 30.0, color: Colors.black),
                 ),
               ),

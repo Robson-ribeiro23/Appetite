@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
+//import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:appetite/services/esp32service.dart';
 import 'package:appetite/controllers/historycontroller.dart';
@@ -35,7 +35,7 @@ class HomeController extends ChangeNotifier {
     if (_status == ConnectionStatus.connecting) return;
 
     _status = ConnectionStatus.connecting;
-    _message = "Buscando ESP32 na rede...";
+    _message = "Buscando Alimentador na rede...";
     notifyListeners();
 
     // Tenta "pingar" o ESP32 via HTTP
@@ -48,7 +48,7 @@ class HomeController extends ChangeNotifier {
       
     } else {
       _status = ConnectionStatus.error;
-      _message = "Não encontrado no IP configurado.\nVerifique se o PC e ESP32 estão no mesmo Wi-Fi.";
+      _message = "Não encontrado no IP configurado.";
       
       // CORREÇÃO AQUI TAMBÉM
       historyController.addEntry(
@@ -60,26 +60,25 @@ class HomeController extends ChangeNotifier {
   }
 
   // --- ALIMENTAÇÃO MANUAL ---
-  Future<void> manualFeed(double grams, {bool isMaintenance = false}) async {
+  Future<bool> manualFeed(double grams, {bool isMaintenance = false}) async {
     if (_status != ConnectionStatus.connected) {
-      _message = "Erro: Não conectado ao ESP32.";
+      _message = "Erro: Não conectado ao Alimentador.";
       notifyListeners();
-      return;
+      return false; // Retorna falha
     }
 
     _message = "Enviando comando...";
     notifyListeners();
 
-    // O ESP32 HTTP espera um JSON simples: {"grams": 50.0}
     final payload = '{"grams": ${grams.toStringAsFixed(1)}}';
     
-    // Envia e espera a resposta (await)
+    // Aguarda o envio
     bool success = await _service.publishCommand('manual', payload);
 
     if (success) {
       _message = isMaintenance 
           ? "Manutenção iniciada com sucesso!" 
-          : "Comando recebido pelo ESP32!";
+          : "Comando recebido pelo Alimentador!";
       
       historyController.addEntry(
         type: HistoryType.manual,
@@ -96,6 +95,7 @@ class HomeController extends ChangeNotifier {
       );
     }
     notifyListeners();
+    return success; // Retorna se deu certo ou não
   }
 
   // --- MANUTENÇÃO (PREENCHER) ---
@@ -112,7 +112,7 @@ class HomeController extends ChangeNotifier {
     bool success = await _service.publishCommand('alarme', alarmsJson);
 
     if (success) {
-      _message = "Alarmes sincronizados com o ESP32.";
+      _message = "Alarmes sincronizados com o Alimentador.";
     } else {
       _message = "Erro ao sincronizar alarmes.";
     }

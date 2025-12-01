@@ -4,7 +4,6 @@ import 'package:appetite/views/widgets/bottomnavbar.dart';
 import 'hometab.dart'; 
 import 'historytab.dart';
 import 'settingstab.dart';
-// Importamos a pasta inteira para a aba de alarmes
 import 'alarmtab/alarmlistview.dart'; 
 
 class MainScreen extends StatefulWidget {
@@ -42,15 +41,26 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_titles[_selectedIndex]),
-        centerTitle: true,
+      // --- CORREÇÃO DE OVERFLOW NA APPBAR ---
+      // Envolvemos a AppBar em um MediaQuery para travar a escala da fonte em 1.0.
+      // Isso impede que o título cresça demais e quebre o layout da barra superior.
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: const TextScaler.linear(1.0),
+          ),
+          child: AppBar(
+            title: Text(_titles[_selectedIndex]),
+            centerTitle: true,
+          ),
+        ),
       ),
       
-      // O corpo exibe a aba selecionada
+      // O corpo exibe a aba selecionada (aqui o texto DEVE crescer, então não tem MediaQuery)
       body: _tabs[_selectedIndex], 
       
-      // A barra de navegação inferior
+      // A barra de navegação inferior (já corrigida no widget dela)
       bottomNavigationBar: CustomBottomNavBar(
         selectedIndex: _selectedIndex,
         onItemSelected: _onItemTapped,

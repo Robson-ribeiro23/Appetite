@@ -4,7 +4,7 @@
 #include <time.h>
 #include <vector>
 
-// --- 1. CONFIGURAÇÃO DA REDE (MUDE ISSO NA HORA H) ---
+// --- 1. CONFIGURAÇÃO DA REDE  
 const char* SSID_FIXO = "appt";  // <--- COLOQUE O NOME EXATO
 const char* SENHA_FIXA = "mkiujn12"; // <--- COLOQUE A SENHA EXATA
 
